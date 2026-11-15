@@ -69,6 +69,21 @@ test('sanitize: 망가진 입력을 거르고 정상 입력은 그대로 둔다'
   assert.deepEqual(bad.items.map(i => [i.def, i.rot]), [['7', 90]]);
 });
 
+test('adopt: 방에 딸려 온 가구 목록을 공용 목록에 합친다', () => {
+  const lib = [], a = M.adopt(lib, example()), b = M.adopt(lib, example());
+  assert.equal(lib.length, 11, '내용이 같은 기본 가구는 하나로');
+  assert.equal(b.library, lib);
+  assert.equal(itemOf(b, '의자').def, defNamed(a, '의자').id);
+  assert.deepEqual([...M.conflicts(b).items], []);
+  const c = example(), bed = defNamed(c, '퀸 침대'), placed = itemOf(c, '퀸 침대'), old = defNamed(a, '퀸 침대').id; // id는 같은데 내용이 다르면 새 id로 들어가고, 놓인 가구도 따라간다
+  placed.def = bed.id = old; bed.params = { ...bed.params, W: 1100 };
+  M.adopt(lib, c);
+  assert.equal(lib.length, 12);
+  assert.equal(M.paramsOf(M.defOf(c, placed)).W, 1100);
+  assert.notEqual(placed.def, old);
+  assert.equal(M.newProject('빈 방', false, lib).library.length, 12);
+});
+
 test('부품 회전: 감싸는 상자, 가구 치수, DAE 꼭짓점·면 방향', () => {
   const near = (a, b) => a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-6, `${a} ≠ ${b}`));
   const board = { name: '판', w: 100, d: 20, h: 10, x: 0, y: 0, z: 0, color: '#ffffff' };

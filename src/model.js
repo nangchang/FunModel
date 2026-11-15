@@ -265,7 +265,7 @@ export function toDAE(nodes) {
 </COLLADA>`;
 }
 
-/* ---------- 프로젝트(방 하나) ---------- */
+/* ---------- 프로젝트(방 하나). library는 계산용으로 달려 있을 뿐, 모든 방이 같은 목록을 본다(adopt) ---------- */
 const half = v => Math.round(clamp(+v || 0, -1e5, 1e5) * 2) / 2; // 가장자리를 벽에 딱 붙이려면 중심이 0.5mm 단위여야 한다
 const turn = v => { const r = ((num(v, 0, -1e6, 1e6) % 360) + 360) % 360; return r > 180 ? r - 360 : r; };
 export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 형태와 범위를 맞춘다. 못 쓰면 null
@@ -277,9 +277,22 @@ export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 �
   const items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), z: half(i.z), rot: turn(i.rot) }));
   return { id: str(raw.id, uid()), name: str(raw.name, '방'), room, openings: arr(raw.openings).map(o => fixOpening(room, o)), library, items };
 }
-export function newProject(name, example) {
+// 가구 목록은 방과 따로 하나만 둔다(모든 방이 같이 쓴다). 방에 딸려 온 목록(백업 파일·v1 저장본)을 거기에 합친다:
+// 내용이 같은 가구는 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id로 넣는다. p.items의 def도 따라 바꾼다
+export function adopt(library, p) {
+  const same = (a, b) => JSON.stringify({ ...a, id: 0 }) === JSON.stringify({ ...b, id: 0 }), old = [...library], map = new Map();
+  for (const d of p.library) {
+    let e = old.find(e => e.id === d.id && same(e, d)) || old.find(e => same(e, d));
+    if (!e) library.push(e = library.some(e => e.id === d.id) ? { ...d, id: uid() } : d);
+    map.set(d.id, e.id);
+  }
+  for (const i of p.items) i.def = map.get(i.def);
+  p.library = library;
+  return p;
+}
+export function newProject(name, example, lib) { // lib: 이미 있는 가구 목록. 없으면 기본 가구로 시작
   const L = {}, mk = (key, name, kind, params = {}) => (L[key] = { id: uid(), name, kind, params });
-  const library = [mk('bed', '퀸 침대', 'bed'), mk('wardrobe', '옷장', 'cabinet', { W: 1200, D: 600, H: 2200, shelves: 1, doors: 2 }), mk('desk', '책상', 'table'), mk('chair', '의자', 'chair'),
+  const library = lib || [mk('bed', '퀸 침대', 'bed'), mk('wardrobe', '옷장', 'cabinet', { W: 1200, D: 600, H: 2200, shelves: 1, doors: 2 }), mk('desk', '책상', 'table'), mk('chair', '의자', 'chair'),
     mk('drawers', '서랍장', 'drawers'), mk('shelf', '책장', 'cabinet', { D: 300, C: c.white }), mk('sofa', '3인 소파', 'sofa'),
     mk('dining', '식탁', 'table', { W: 1600, D: 800, H: 750, top: 30, leg: 70, inset: 60, apron: 80, C: c.walnut, C2: c.walnut }),
     mk('tv', 'TV장', 'cabinet', { W: 1800, D: 400, H: 450, shelves: 0, doors: 3, plinth: 0, C: c.white, C2: c.oak }),

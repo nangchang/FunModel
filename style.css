@@ -1,0 +1,107 @@
+/* 휴대폰: 3D 화면 아래에 접히는 패널. 900px 이상: 오른쪽 패널 */
+:root {
+  --bg: #e9edf1; --surface: #fff; --ink: #1b222a; --muted: #5d6976; --line: #d5dbe2; --chip: #f1f4f7;
+  --accent: #1d5bb8; --accent-soft: #e3ecfa; --on-accent: #fff; --dim: #b86e00; --bad: #c42f2f; --bad-soft: #fbe7e7; --scene: #e4e9ee;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141a20; --surface: #1c232b; --ink: #e6ebf0; --muted: #98a4b1; --line: #2f3944; --chip: #242d37;
+    --accent: #6ea3f2; --accent-soft: #22344f; --on-accent: #0d1621; --dim: #f0a640; --bad: #f07272; --bad-soft: #3b2324; --scene: #20272f; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: grid; grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr); background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } /* iOS: 가구를 천천히 끌 때 글자 선택·길게 누르기 메뉴가 뜨지 않게 */
+input, select { -webkit-user-select: text; user-select: text; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { opacity: .4; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+[hidden] { display: none !important; }
+
+header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--surface); border-bottom: 1px solid var(--line); }
+.sp { flex: 1; }
+.ib { min-width: 38px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 17px; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--chip); }
+.seg button { border: 0; border-radius: 7px; padding: 6px 12px; background: none; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .15); }
+
+#stage { position: relative; overflow: hidden; background: var(--scene); min-height: 0; }
+#c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+#labels div { position: absolute; left: 0; top: 0; padding: 0 5px; border-radius: 4px; white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums;
+  background: var(--surface); color: var(--dim); border: 1px solid var(--dim); }
+#labels div.name { border-color: transparent; color: var(--ink); font-weight: 600; background: color-mix(in srgb, var(--surface) 80%, transparent); }
+#hud { position: absolute; left: 10px; top: 10px; pointer-events: none; }
+#hud .seg { pointer-events: auto; }
+#fit { position: absolute; right: 10px; top: 10px; }
+.chip, .pill { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+
+#panel { display: flex; flex-direction: column; min-height: 0; height: 46dvh; /* 고정: 가구를 고를 때 화면 크기가 바뀌면 손가락 밑 그림이 움직인다 */ background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+#grab { border: 0; background: none; padding: 8px; }
+#grab::before { content: ""; display: block; width: 40px; height: 4px; margin: auto; border-radius: 2px; background: var(--line); }
+#pbody { display: flex; flex-direction: column; gap: 12px; overflow: auto; padding: 0 14px 14px; }
+#pbody > * { flex-shrink: 0; } /* 긴 목록이 눌려 접히지 않고 패널이 스크롤되게 */
+body.folded #pbody { display: none; }
+body.folded #panel { height: auto; }
+@media (min-width: 900px) {
+  body { grid-template: auto minmax(0, 1fr) / minmax(0, 1fr) 380px; }
+  header { grid-column: 1 / -1; }
+  #panel, body.folded #panel { height: auto; border-top: 0; border-left: 1px solid var(--line); }
+  #grab { display: none; }
+  #pbody, body.folded #pbody { display: flex; padding-top: 14px; }
+}
+
+h2 { margin: 0; font-size: 16px; }
+h3 { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.hint { margin: 0; font-size: 12px; color: var(--muted); }
+.head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.head small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.head .x { margin-left: auto; border: 0; background: none; font-size: 16px; padding: 4px 8px; color: var(--muted); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 10px; background: none; color: var(--muted); font-weight: 600; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.btn { border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; background: var(--surface); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.danger { color: var(--bad); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.fld { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 0; min-width: 0; }
+.fld.wide { grid-column: 1 / -1; }
+.fld > span { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.fld input:not([type=color]), .fld select { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: var(--surface); font-size: 16px; font-variant-numeric: tabular-nums; }
+.fld em { align-self: center; padding-left: 5px; font-style: normal; font-size: 12px; color: var(--muted); }
+.sw { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sw button { width: 28px; height: 28px; border-radius: 7px; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.sw button.on { box-shadow: 0 0 0 2px var(--accent); }
+.sw input { width: 36px; height: 30px; padding: 0; border: 0; background: none; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.card { position: relative; display: flex; border: 1px solid var(--line); border-radius: 10px; min-height: 58px; }
+.card > button:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; justify-content: center; border: 0; border-radius: 10px; background: none; padding: 8px 10px; text-align: left; }
+.card b { font-size: 13px; padding-right: 36px; }
+.card small { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.card .mini { position: absolute; right: 5px; top: 5px; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; background: var(--chip); font-size: 11px; color: var(--muted); }
+.card.new { border-style: dashed; color: var(--accent); font-weight: 600; }
+
+.list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.list button { display: flex; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--line); padding: 8px 10px; background: var(--surface); text-align: left; }
+.list button:last-child { border-bottom: 0; }
+.list button.on { background: var(--accent-soft); }
+.list span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list small { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+i.dot { flex: none; display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; border: 1px solid rgb(0 0 0 / .2); vertical-align: -1px; }
+
+.cut { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cut th, .cut td { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cut th { color: var(--muted); }
+.cut :is(th, td):first-child { text-align: left; white-space: normal; }
+
+dialog { width: min(360px, calc(100vw - 24px)); max-height: 85dvh; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--surface); color: var(--ink); }
+dialog::backdrop { background: rgb(10 14 18 / .45); }
+dialog > div { display: flex; flex-direction: column; gap: 8px; }
+#toast { position: fixed; left: 50%; bottom: 24px; translate: -50% 0; max-width: calc(100vw - 32px); padding: 9px 14px; border-radius: 10px; background: var(--ink); color: var(--surface); font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 9; }
+#toast.show { opacity: 1; }

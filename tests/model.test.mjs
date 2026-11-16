@@ -97,7 +97,7 @@ test('가구만 내보낸 파일: 방 없이 읽어 목록에 없는 가구만 �
 
 test('저장본 읽기: 버전 확인, v1, 방이 없으면 실패', () => {
   const p = example(), v1 = JSON.parse(JSON.stringify({ cur: p.id, projects: [p] })); // v 없음, 방마다 library
-  assert.deepEqual(M.readStore({ v: 3, projects: [] }), { newer: true }, '더 새 버전');
+  assert.deepEqual(M.readStore({ v: M.VER + 1, projects: [] }), { newer: true }, '더 새 버전');
   const r = M.readStore(v1);
   assert.deepEqual([r.cur, r.projects.length, r.library.length, r.projects[0].library === r.library], [p.id, 1, 11, true]);
   assert.equal(M.readStore({ ...JSON.parse(M.dumpStore(r)), v: 2 }).projects.length, 1, 'v 2');
@@ -320,7 +320,7 @@ test('공유 링크: 쓰레기·빈 문자열은 null, 더 새 버전은 newer, 
   const pack = async o => Buffer.from(await new Response(new Blob([JSON.stringify(o)]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()).toString('base64url');
   for (const bad of ['', 'abc', '!!!!', '%%%', 'AAAAAAAA']) assert.equal(await M.decodeShare(bad), null, bad);
   assert.equal(await M.decodeShare(await pack({ v: 2 })), null, '방이 없다');
-  assert.deepEqual(await M.decodeShare(await pack({ ...example(), v: 3 })), { newer: true });
+  assert.deepEqual(await M.decodeShare(await pack({ ...example(), v: M.VER + 1 })), { newer: true });
   assert.equal((await M.decodeShare(await pack(example()))).items.length, 6, '다른 인코더로 만든 것도 읽는다');
   assert.equal(await M.decodeShare(await pack({ ...example(), pad: 'x'.repeat(3e6) })), null, '2MB 넘게 풀리면 끊는다');
   const CS = globalThis.CompressionStream;
@@ -336,4 +336,50 @@ test('평면도 SVG: 가구 발자국, 방·문·창문 치수, 이름 escape, �
   const s2 = M.planSVG(odd);
   assert.ok(!s2.includes('<b>') && s2.includes('&#60;b&#62;방'));
   assert.ok(!/NaN|Infinity|undefined/.test(s2));
+});
+
+test('기둥·붙박이: sanitize, 겹침(높이 포함), 열림 막힘, 평면도, 저장본 왕복', () => {
+  const library = [{ id: 'box', name: '상자', kind: 'box' }, { id: 'sh', name: '벽 선반', kind: 'box', params: { W: 800, D: 250, H: 20 } }, { id: 'rug', name: '러그', kind: 'box', params: { W: 1500, D: 1000, H: 10 } }, { id: 'dr', name: '서랍장', kind: 'drawers' }];
+  const scene = (blocks, ...items) => M.sanitize({ room: { w: 4000, d: 4000, h: 2400 }, blocks, library, items: items.map(([def, x, z, y]) => ({ id: def, def, x, z, y })) });
+  const why = (p, id) => M.conflicts(p).items.get(id) ?? null, pillar = { id: 'box', x: 1000, z: 1000, w: 400, d: 400 }; // id가 가구 id와 같아도 헷갈리지 않는다
+  assert.deepEqual(M.sanitize({ room: {} }).blocks, [], '없으면 빈 목록');
+  const [b] = scene([{ x: -5, z: 99999, w: 10, d: 400, h: 'x' }]).blocks;
+  assert.deepEqual([b.x, b.z, b.w, b.d, b.h], [0, 3600, 50, 400, 2400], '범위를 맞추고 높이 기본값은 방 높이');
+  assert.deepEqual(['x', 'w', 'd', 'h'].map(k => M.fixBlock({ w: 1000, d: 800, h: 2000 }, { x: 300, w: 5000, d: 5000, h: 9000 })[k]), [0, 1000, 800, 2000], '방보다 큰 블록');
+  assert.equal(why(scene([pillar], ['box', 1600, 1200]), 'box'), '겹침');
+  assert.equal(why(scene([pillar], ['box', 1700, 1200]), 'box'), null, '옆에 딱 붙이면 통과');
+  assert.equal(why(scene([{ ...pillar, h: 300 }], ['sh', 1200, 1200, 1500]), 'sh'), null, '낮은 블록 위에 건 선반');
+  assert.equal(why(scene([pillar], ['sh', 1200, 1200, 1500]), 'sh'), '겹침');
+  assert.equal(why(scene([pillar], ['rug', 1200, 1200]), 'rug'), null, '러그는 통과');
+  const dr = scene([], ['dr', 2000, 1000]), front = 1000 + M.bounds(M.partsOf(dr.library[3])).D / 2, zones = p => M.openZones(p, p.items[0]).some(z => z.blocked);
+  assert.equal(zones(dr), false);
+  assert.equal(zones(scene([{ x: 1800, z: front + 100, w: 400, d: 400 }], ['dr', 2000, 1000])), true, '서랍 앞을 막은 기둥');
+  const p = scene([pillar]);
+  assert.ok(M.planSVG(p).includes('<rect x="1000" y="1000" width="400" height="400" fill="#3a424b"/>'));
+  assert.equal(M.exportNodes(p)[0].boxes.filter(b => b.name === '기둥').length, 1, 'DAE에 벽과 같이');
+  const s = { cur: p.id, library: p.library, projects: [p], cut: M.cutOpts() };
+  assert.deepEqual(M.readStore(JSON.parse(M.dumpStore(s))).projects[0].blocks, p.blocks);
+});
+
+test('밑그림: sanitize, 두 점 축척, 모서리 맞추기, 공유 링크에서 빠짐, 저장본·평면도', async () => {
+  const src = 'data:image/png;base64,iVBORw0KGgo=', p = example(), withBg = bg => M.sanitize({ ...JSON.parse(JSON.stringify(p)), bg });
+  assert.deepEqual(M.sanitize(JSON.parse(JSON.stringify(p))), p, 'bg 없는 예전 방은 그대로');
+  assert.ok(!('bg' in p));
+  for (const bad of ['data:image/svg+xml;base64,AAAA', 'data:image/png;base64,AA"A', 'javascript:x', 'data:image/png;base64,' + 'A'.repeat(1.5e6), 7, null]) assert.equal(withBg({ src: bad, w: 4000 }).bg, undefined, String(bad).slice(0, 30));
+  assert.deepEqual(withBg({ src, ar: .753, x: -120.5, z: 'x', w: 50, op: .35 }).bg, { src, ar: .753, x: -120.5, z: 0, w: 100, op: .35 }, '소수 유지와 범위');
+  assert.deepEqual([withBg({ src, ar: 99, op: 5 }).bg.ar, withBg({ src, ar: 0, op: 0 }).bg.op, withBg({ src }).bg.op], [20, .1, .6]);
+  const bg = { src, ar: .5, x: -300, z: -200, w: 8000, op: .6 }, map = (g, u, v) => [g.x + u * g.w, g.z + v * g.w]; // 그림 위 점(가로 비율 u, v) → 방 좌표
+  const [u1, v1, u2, v2] = [.1, .1, .6, .3], s = M.bgScale(bg, map(bg, u1, v1), map(bg, u2, v2), 2500), d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  assert.ok(Math.abs(d(map(s, u1, v1), map(s, u2, v2)) - 2500) < 1e-6, '두 점 거리가 dist');
+  assert.ok(d(map(s, u1, v1), map(bg, u1, v1)) < 1e-6, '첫째 점은 제자리');
+  assert.deepEqual(M.bgScale(bg, [5, 5], [6, 5], 1000), bg, '너무 가까운 두 점');
+  assert.deepEqual(M.bgScale(bg, [0, 0], [1000, 0], NaN), bg);
+  const m = M.bgMove(bg, map(bg, .2, .1));
+  assert.ok(d(map(m, .2, .1), [0, 0]) < 1e-6, '찍은 점이 (0,0)으로');
+  const q = withBg(bg), r = await M.decodeShare(await M.encodeShare(q));
+  assert.ok(r && !('bg' in r), '공유 링크에는 밑그림이 없다');
+  const st = { cur: q.id, library: q.library, projects: [q], cut: M.cutOpts() };
+  assert.deepEqual(M.readStore(JSON.parse(M.dumpStore(st))).projects[0].bg, bg);
+  assert.ok(M.planSVG(q).includes(`<image href="${src}" x="-300" y="-200" width="8000" height="4000" opacity="0.6" preserveAspectRatio="none"/>`));
+  assert.ok(!M.planSVG(p).includes('<image'));
 });

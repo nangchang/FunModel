@@ -6,6 +6,7 @@ export const DEG = Math.PI / 180, WT = 100; // WT: 벽 두께(방 치수 바깥�
 export const uid = () => Math.random().toString(36).slice(2, 10);
 const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
 const num = (v, d, a, b) => clamp(v !== null && v !== '' && Number.isFinite(+v) ? Math.round(+v) : d, a, b);
+const real = (v, d, a, b) => clamp(v !== null && v !== '' && Number.isFinite(+v) ? +v : d, a, b); // num과 같되 반올림하지 않는다
 const hex = v => (/^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : null);
 const str = (v, d) => String(v ?? d).slice(0, 60) || d;
 
@@ -127,6 +128,10 @@ export function fixOpening(room, o) {
   const w = num(o.w, 900, 300, len), h = num(o.h, door ? 2100 : 1200, 300, room.h);
   return { id: str(o.id, uid()), type: door ? 'door' : 'window', wall, pos: num(o.pos, 0, 0, len - w), w, h, sill: door ? 0 : num(o.sill, 900, 0, room.h - h), hinge: o.hinge === 'b' ? 'b' : 'a', swing: o.swing === 'out' ? 'out' : 'in' };
 }
+export function fixBlock(room, b) { // 기둥·붙박이: 방 좌표의 축 정렬 상자. x,z = 최소 모서리, h = 바닥부터 높이(기본 방 높이)
+  const w = num(b.w, 400, 50, room.w), d = num(b.d, 400, 50, room.d);
+  return { id: str(b.id, uid()), x: num(b.x, 0, 0, room.w - w), z: num(b.z, 0, 0, room.d - d), w, d, h: num(b.h, room.h, 50, room.h) };
+}
 export function doorZone(room, o) { // 비워 둬야 하는 바닥 영역(볼록 다각형): 안쪽 열림은 문이 쓸고 가는 부채꼴, 아니면 문 앞 100mm
   const f = FRAMES[o.wall](room);
   if (o.swing !== 'in') return [at(f, o.pos, 0), at(f, o.pos + o.w, 0), at(f, o.pos + o.w, 100), at(f, o.pos, 100)];
@@ -134,7 +139,7 @@ export function doorZone(room, o) { // 비워 둬야 하는 바닥 영역(볼록
   for (let i = 0; i <= 6; i++) pts.push(at(f, h + dir * o.w * Math.cos(i * Math.PI / 12), o.w * Math.sin(i * Math.PI / 12)));
   return pts;
 }
-export function wallBoxes(room, openings) { // kind: wall | top(개구부 위, 평면에서는 숨김) | glass
+export function wallBoxes(room, openings, blocks = []) { // kind: wall | top(개구부 위, 평면에서는 숨김) | glass | block(기둥·붙박이, wall 없음)
   const out = [];
   for (const wall of 'NSWE') {
     const len = FRAMES[wall](room).len, ext = 'NS'.includes(wall) ? WT : 0; // 위·아래 벽이 모서리를 채운다
@@ -147,6 +152,7 @@ export function wallBoxes(room, openings) { // kind: wall | top(개구부 위, �
     }
     add('wall', s, len + ext, 0, room.h);
   }
+  for (const b of blocks) out.push({ kind: 'block', ...b, y: 0 });
   return out;
 }
 
@@ -194,9 +200,10 @@ export function overlap(A, B, tol = 1) { // 볼록 다각형 분리축 판정. t
 }
 const tall = (a, b) => a.y0 < b.y1 - 1 && b.y0 < a.y1 - 1; // 높이 구간이 겹치는가
 const apart = (p, q) => [0, 1, 2].some(i => Math.abs(p.c[i] - q.c[i]) > p.e[i] + q.e[i] - 1); // 감싸는 상자부터 떨어져 있으면 볼 것 없다
+const ZERO = { x: 0, z: 0, rot: 0 }, blockShape = b => ({ poly: rect(ZERO, b.x, b.z, b.x + b.w, b.z + b.d), y0: 0, y1: b.h, parts: [solid(ZERO, { ...b, y: 0 }, { cx: 0, cz: 0 })] }); // 기둥을 가구 모양처럼
 const hit = (a, b) => tall(a, b) && overlap(a.poly, b.poly) && a.parts.some(p => b.parts.some(q => !apart(p, q) && obbHit(p, q))); // 부품 단위라 책상 밑 의자는 통과
 export function checker(proj) { // 가구 하나(놓아 볼 후보 포함)의 문제를 돌려주는 함수
-  const { room } = proj, shapes = proj.items.map(it => [it.id, shape(proj, it)]);
+  const { room } = proj, shapes = [...proj.items.map(it => [it.id, shape(proj, it)]), ...proj.blocks.map(b => [null /* 가구 id와 안 겹치게 */, blockShape(b)])];
   const zones = proj.openings.filter(o => o.type === 'door').map(o => [o, doorZone(room, o)]);
   return it => {
     const s = shape(proj, it), doors = s.low ? [] : zones.filter(([o, z]) => s.parts.some(p => p.y0 < o.h && overlap(foot(p), z))).map(([o]) => o.id);
@@ -211,10 +218,10 @@ export function conflicts(proj) {
   return { items, doors };
 }
 // 가구의 문·서랍을 여는 데 드는 바닥 영역 → [{ poly, y0, y1, blocked }] (방 좌표). role이 붙은 부품만 본다(생성기 가구)
-// 막힘: 영역이 방 밖으로 나가거나, 다른 가구 부품의 바닥 그림자와 겹치면서 높이 구간도 겹칠 때. 러그는 뺀다
+// 막힘: 영역이 방 밖으로 나가거나, 다른 가구 부품·기둥의 바닥 그림자와 겹치면서 높이 구간도 겹칠 때. 러그는 뺀다
 export function openZones(proj, it) {
   const { room } = proj, parts = partsOf(defOf(proj, it)), b = bounds(parts), at = (x, z) => spot(it, x - b.cx, z - b.cz);
-  const others = proj.items.filter(o => o.id !== it.id).map(o => shape(proj, o)).filter(s => !s.low);
+  const others = [...proj.items.filter(o => o.id !== it.id).map(o => shape(proj, o)).filter(s => !s.low), ...proj.blocks.map(blockShape)];
   return parts.filter(p => p.role).map(p => {
     const f = p.z + p.d, y0 = (it.y || 0) + p.y, y1 = y0 + p.h, L = p.role === 'doorL', hx = L ? p.x : p.x + p.w, len = p.z - BACK - 20; // len: 서랍이 나오는 길이(buyList의 레일과 같은 기준)
     const poly = p.role === 'drawer' ? [at(p.x, f), at(p.x + p.w, f), at(p.x + p.w, f + len), at(p.x, f + len)] // 서랍: 앞판 폭 × 나오는 길이
@@ -287,7 +294,7 @@ export function nest(rows, o) {
 export function exportNodes(proj, def) {
   const node = (d, x = 0, z = 0, rot = 0, y = 0) => { const parts = partsOf(d), b = bounds(parts); return { name: d.name, x, y, z, rot, boxes: parts.map(p => ({ ...p, x: p.x - b.cx, z: p.z - b.cz })) }; };
   if (def) return [node(def)];
-  const { room } = proj, walls = wallBoxes(room, proj.openings).filter(b => b.kind !== 'glass').map(b => ({ ...b, name: '벽', color: room.wall }));
+  const { room } = proj, walls = wallBoxes(room, proj.openings, proj.blocks).filter(b => b.kind !== 'glass').map(b => ({ ...b, name: b.kind === 'block' ? '기둥' : '벽', color: room.wall }));
   return [{ name: '방', x: 0, z: 0, rot: 0, boxes: [{ name: '바닥', x: 0, y: -50, z: 0, w: room.w, d: room.d, h: 50, color: room.floor }, ...walls] }, ...proj.items.map(it => node(defOf(proj, it), it.x, it.z, it.rot, it.y))];
 }
 const xml = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
@@ -356,11 +363,11 @@ export function drawingSVG(def) {
   const texts = dims.map(([x1, y1, x2, y2, v]) => { const x = r1((x1 + x2) / 2), y = r1((y1 + y2) / 2); return x1 === x2 ? `<text x="${x}" y="${y}" dy="${r1(-u)}" text-anchor="middle" transform="rotate(-90 ${x} ${y})">${Math.round(v)}</text>` : `<text x="${x}" y="${y}" dy="${r1(2.8 * u)}" text-anchor="middle">${Math.round(v)}</text>`; }).join('');
   return svg(sx + D + m, fy + H + m, 2.2 * u, `<text x="${r1(m)}" y="${r1(m)}" font-size="${r1(3 * u)}" font-weight="600">${xml(def.name)} · 단위 mm</text><g stroke="#222" stroke-width="${r1(u / 6)}" stroke-linejoin="round">${polys}</g><path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 6)}"/>${texts}`);
 }
-// 방 평면도(PNG·인쇄가 같이 쓴다): 바닥, 벽(개구부 위·아래 조각은 빼고 유리는 다른 색), 문 열림(점선), 가구 발자국(낮은 것부터)과 이름·W × D,
+// 방 평면도(PNG·인쇄가 같이 쓴다): 바닥, 벽(개구부 위·아래 조각은 빼고 유리는 다른 색)·기둥, 문 열림(점선), 가구 발자국(낮은 것부터)과 이름·W × D,
 // 치수: 위·왼쪽 바깥에 방 안치수, 문·창문이 있는 벽마다 바깥쪽에 모서리→개구부→모서리 이어 붙인 치수. 가구 발자국만 <polygon>이다
 export function planSVG(proj) {
   const { room } = proj, u = Math.max(room.w, room.d) / 80, o = WT + 10 * u, P = pts => pts.map(([x, z]) => `${r1(x)},${r1(z)}`).join(' ');
-  const walls = wallBoxes(room, proj.openings).filter(b => b.kind === 'glass' || (b.kind === 'wall' && b.h >= room.h)).map(b => `<rect x="${r1(b.x)}" y="${r1(b.z)}" width="${r1(b.w)}" height="${r1(b.d)}" fill="${b.kind === 'glass' ? '#7db7d8' : '#3a424b'}"/>`).join('');
+  const walls = wallBoxes(room, proj.openings, proj.blocks).filter(b => b.kind === 'glass' || b.kind === 'block' || (b.kind === 'wall' && b.h >= room.h)).map(b => `<rect x="${r1(b.x)}" y="${r1(b.z)}" width="${r1(b.w)}" height="${r1(b.d)}" fill="${b.kind === 'glass' ? '#7db7d8' : '#3a424b'}"/>`).join('');
   const doors = proj.openings.filter(o => o.type === 'door').map(o => `M${P(doorZone(room, o)).replace(/ /g, 'L')}Z`).join('');
   const label = (t, x, y, fs, w = 400) => `<text x="${r1(x)}" y="${r1(y)}" font-size="${r1(fs)}" font-weight="${w}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="#fff" stroke-width="${r1(fs / 4)}" stroke-linejoin="round">${xml(t)}</text>`;
   const items = proj.items.map(it => [defOf(proj, it), shape(proj, it), it]).sort((a, b) => a[1].y1 - b[1].y1);
@@ -380,7 +387,8 @@ export function planSVG(proj) {
     cuts.slice(1).forEach((s, i) => dim(wall, cuts[i], s, WT + 2 * u));
   }
   dim('N', 0, room.w, WT + 6 * u); dim('W', 0, room.d, WT + 6 * u);
-  return svg(room.w + 2 * o, room.d + 2 * o, 2.2 * u, `<g transform="translate(${r1(o)} ${r1(o)})"><rect width="${room.w}" height="${room.d}" fill="${room.floor}"/>${walls}
+  const g = proj.bg, under = g ? `<image href="${xml(g.src)}" x="${r1(g.x)}" y="${r1(g.z)}" width="${r1(g.w)}" height="${r1(g.w * g.ar)}" opacity="${g.op}" preserveAspectRatio="none"/>` : ''; // 밑그림: 바닥 위·가구 아래
+  return svg(room.w + 2 * o, room.d + 2 * o, 2.2 * u, `<g transform="translate(${r1(o)} ${r1(o)})"><rect width="${room.w}" height="${room.d}" fill="${room.floor}"/>${under}${walls}
 <path d="${doors}" fill="none" stroke="#3a424b" stroke-width="${r1(u / 8)}" stroke-dasharray="${r1(u)} ${r1(u * .7)}"/><g stroke="#3a424b" stroke-width="${r1(u / 12)}" stroke-linejoin="round">${feet}</g>${names}
 <path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 8)}"/>${texts}<text x="${r1(-WT)}" y="${r1(room.d + WT + 8.5 * u)}" font-size="${r1(2.6 * u)}" font-weight="600">${xml(proj.name)} · 단위 mm</text></g>`);
 }
@@ -388,14 +396,26 @@ export function planSVG(proj) {
 /* ---------- 프로젝트(방 하나). library는 계산용으로 달려 있을 뿐, 모든 방이 같은 목록을 본다(adopt) ---------- */
 const half = v => Math.round(clamp(+v || 0, -1e5, 1e5) * 2) / 2; // 가장자리를 벽에 딱 붙이려면 중심이 0.5mm 단위여야 한다
 const turn = v => { const r = ((num(v, 0, -1e6, 1e6) % 360) + 360) % 360; return r > 180 ? r - 360 : r; };
+// 밑그림(평면도 그림): src = 줄인 그림의 data URL, ar = 세로/가로, x,z = 그림 왼쪽 위의 방 좌표, w = 그림 가로의 실제 길이, op = 불투명도. 못 쓰면 null
+export const BGMAX = 1.5e6;
+function fixBg(g) {
+  if (!g || typeof g.src !== 'string' || g.src.length > BGMAX || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.src)) return null;
+  return { src: g.src, ar: real(g.ar, 1, .05, 20), x: real(g.x, 0, -1e5, 1e5), z: real(g.z, 0, -1e5, 1e5), w: real(g.w, 4000, 100, 1e5), op: real(g.op, .6, .1, 1) };
+}
+export function bgScale(bg, p1, p2, dist) { // 방 좌표의 두 점 p1·p2([x, z]) 사이가 실제 dist(mm)가 되게 p1을 중심으로 늘이거나 줄인다
+  const len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]), k = dist / len;
+  if (!(len >= 10 && k > 0 && Number.isFinite(k))) return bg; // 두 점이 10mm 안이거나 dist가 이상하면 그대로
+  return { ...bg, x: p1[0] + (bg.x - p1[0]) * k, z: p1[1] + (bg.z - p1[1]) * k, w: bg.w * k };
+}
+export const bgMove = (bg, p) => ({ ...bg, x: bg.x - p[0], z: bg.z - p[1] }); // 찍은 점 p를 방의 왼쪽 위 안쪽 모서리 (0,0)으로
 export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 형태와 범위를 맞춘다. 못 쓰면 null
   if (!raw || typeof raw !== 'object' || !raw.room || typeof raw.room !== 'object') return null;
   const arr = v => (Array.isArray(v) ? v.filter(o => o && typeof o === 'object') : []), r = raw.room;
   const room = { w: num(r.w, 4000, 500, 30000), d: num(r.d, 3000, 500, 30000), h: num(r.h, 2400, 1000, 6000), wall: hex(r.wall) || '#f2f0eb', floor: hex(r.floor) || '#d6c3a6', snap: [0, 10, 50, 100].includes(+r.snap) ? +r.snap : 50 };
   const library = arr(raw.library).filter(d => d.kind === 'custom' || Object.hasOwn(KINDS, d.kind))
     .map(d => ({ id: str(d.id, uid()), name: str(d.name, '가구'), kind: d.kind, ...(d.kind === 'custom' ? { parts: arr(d.parts).map(part) } : { params: paramsOf(d) }) }));
-  const items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), y: num(i.y, 0, 0, 6000), z: half(i.z), rot: turn(i.rot) }));
-  return { id: str(raw.id, uid()), name: str(raw.name, '방'), room, openings: arr(raw.openings).map(o => fixOpening(room, o)), library, items };
+  const bg = fixBg(raw.bg), items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), y: num(i.y, 0, 0, 6000), z: half(i.z), rot: turn(i.rot) }));
+  return { id: str(raw.id, uid()), name: str(raw.name, '방'), room, openings: arr(raw.openings).map(o => fixOpening(room, o)), blocks: arr(raw.blocks).map(b => fixBlock(room, b)), ...(bg && { bg }), library, items };
 }
 // 가구 목록은 방과 따로 하나만 둔다(모든 방이 같이 쓴다). 방에 딸려 온 목록(백업 파일·v1 저장본)을 거기에 합친다:
 // 내용이 같은 가구는 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id로 넣는다. p.items의 def도 따라 바꾼다
@@ -416,7 +436,7 @@ const defOfEntry = ({ name, kind, params }) => ({ id: uid(), name, kind, params:
 export const findDef = (library, e) => { const d = defOfEntry(e); return library.find(x => same(x, d)); }; // 내용이 같은 가구(없으면 undefined)
 export function useDef(library, e) { return findDef(library, e) || library[library.push(defOfEntry(e)) - 1]; } // 있으면 그것, 없으면 새 id로 넣는다
 /* ---------- 저장본 = 전체 백업 파일: { v, cur, library, projects(방마다 library 없음), cut } ---------- */
-export const VER = 2; // 저장본 형식 버전. 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
+export const VER = 3; // 저장본 형식 버전(3: 방에 blocks·bg). 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
 export const dumpStore = s => JSON.stringify({ v: VER, ...s, projects: s.projects.map(({ library, ...p }) => p) });
 export function readStore(s) { // 저장본·전체 백업(v1: v 없음, 방마다 library) → { cur, library, projects, cut }. 더 새 버전이면 { newer: true }, 못 읽으면 null
   if (s?.v > VER) return { newer: true };
@@ -437,7 +457,7 @@ export function mergeStore(store, inc) { // 읽은 전체 백업(readStore)을 �
 /* ---------- 공유 링크: #room= 뒤에 base64url(deflate-raw(JSON { v, ...방 })). 방에는 놓인 가구의 정의만 싣는다 ---------- */
 const MAXSHARE = 2e6; // 남이 준 링크라 압축을 풀 때 이 크기(바이트)에서 끊는다
 export async function encodeShare(proj) { // → 해시 뒤에 붙일 문자열. 압축을 못 하는 브라우저(deflate-raw가 없는 Chromium 103 전 포함)면 null
-  const used = new Set(proj.items.map(i => i.def)), json = JSON.stringify({ v: VER, ...proj, library: proj.library.filter(d => used.has(d.id)) });
+  const used = new Set(proj.items.map(i => i.def)), json = JSON.stringify({ v: VER, ...proj, bg: undefined /* 밑그림은 링크가 너무 길어져 뺀다 */, library: proj.library.filter(d => used.has(d.id)) });
   let buf;
   try { buf = new Uint8Array(await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); } catch { return null; }
   let bin = '';

@@ -32,22 +32,25 @@ if (locked) window.fmBar?.('지금은 저장되지 않습니다', '이 저장본
 const shareHash = location.hash.startsWith('#room='), shared = shareHash ? await M.decodeShare(location.hash.slice(6)) : null;
 let viewing = shared?.room ? shared : null;
 let proj = viewing || store.projects.find(p => p.id === store.cur) || store.projects[0];
-const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체' }; // q: 가구 검색어, cat: 가구 탭의 분류
+const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체', pick: null }; // q: 가구 검색어, cat: 가구 탭의 분류, pick: 밑그림 점 찍기 { kind: 'scale' | 'origin', pts }
 const hist = { undo: [], redo: [] };
 let bad = { items: new Map(), doors: new Set() };
 
 const curDef = () => proj.library.find(d => d.id === ui.defId);
 const selItem = () => (ui.sel?.type === 'item' ? proj.items.find(i => i.id === ui.sel.id) : null);
 const selOpen = () => (ui.sel?.type === 'open' ? proj.openings.find(o => o.id === ui.sel.id) : null);
+const selBlock = () => (ui.sel?.type === 'block' ? proj.blocks.find(b => b.id === ui.sel.id) : null);
 const selPart = () => { const d = curDef(); return d?.kind === 'custom' ? d.parts.find(p => p.id === ui.partId) : null; };
 
 function setProj(p) { if (!viewing) { store.projects[store.projects.indexOf(proj)] = p; store.cur = p.id; store.library = p.library; } proj = p; } // 지금 방의 library가 곧 공용 가구 목록(보기 방의 library는 그 방 것)
+// shortcut: 스냅숏마다 밑그림(data URL, 수백 KB)까지 복사된다(최대 60개), 메모리가 문제 되면 bg를 되돌리기 기록 밖에 둔다
 function snap() { hist.undo.push(JSON.stringify(proj)); if (hist.undo.length > 60) hist.undo.shift(); hist.redo = []; }
 function commit(fn) { if (viewing) return; snap(); fn(); refresh(); }
 function travel(from, to) { if (!from.length || viewing) return; to.push(JSON.stringify(proj)); setProj(JSON.parse(from.pop())); refresh(); }
 function refresh() { // 모든 변경 뒤: 값 범위를 다시 맞추고(sanitize) 장면·패널·저장을 갱신
   setProj(M.sanitize(proj));
-  if (ui.sel && !selItem() && !selOpen()) ui.sel = null;
+  if (ui.sel && !selItem() && !selOpen() && !selBlock()) ui.sel = null;
+  if (!proj.bg) ui.pick = null;
   rebuild(); renderPanel(); save();
 }
 
@@ -84,6 +87,8 @@ const BOX = new THREE.BoxGeometry(1, 1, 1), EDGE = new THREE.EdgesGeometry(BOX),
 const mat = c => (mats[c] ||= new THREE.MeshLambertMaterial({ color: c, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
 const GLASS = new THREE.MeshLambertMaterial({ color: 0x9fd0ea, transparent: true, opacity: .45 });
 const line = (color, o) => new THREE.LineBasicMaterial({ color, ...o });
+const FLAT = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // 밑그림 판: 그림 위쪽이 −z(평면도 위)
+let bgTex = null, bgSrc = ''; // 밑그림 텍스처는 src 하나만 캐시(장면을 다시 만들 때마다 디코드하지 않게)
 const L = { edge: line(0x1b222a, { transparent: true, opacity: .4 }), door: line(0x5d6976), sel: line(0x2f7df6, { depthTest: false }), dim: line(0xb86e00, { depthTest: false }), bad: line(0xc42f2f, { depthTest: false }) };
 
 let pick = [], labels = [], dimPts = [], tmp = [];
@@ -109,7 +114,14 @@ function buildRoom() {
   const { room } = proj;
   bad = M.conflicts(proj);
   world.add(box({ x: -M.WT, y: -50, z: -M.WT, w: room.w + 2 * M.WT, h: 50, d: room.d + 2 * M.WT }, room.floor));
-  for (const b of M.wallBoxes(room, proj.openings)) { const m = box(b, b.kind === 'glass' ? GLASS : room.wall); m.userData = { wall: b.wall, top: b.kind === 'top' }; world.add(m); }
+  if (proj.bg) { // 바닥 바로 위, 가구·러그 아래
+    const g = proj.bg, h = g.w * g.ar;
+    if (bgSrc !== g.src) { bgTex?.dispose(); bgSrc = g.src; bgTex = new THREE.TextureLoader().load(g.src, invalidate); bgTex.colorSpace = THREE.SRGBColorSpace; }
+    const m = new THREE.Mesh(FLAT, new THREE.MeshBasicMaterial({ map: bgTex, transparent: true, opacity: g.op, depthWrite: false }));
+    m.scale.set(g.w, 1, h); m.position.set(g.x + g.w / 2, 2, g.z + h / 2); tmp.push(m.material); world.add(m);
+  }
+  if (ui.pick?.pts.length) { const [x, z] = ui.pick.pts[0]; dimPts.push(x - 150, 5, z, x + 150, 5, z, x, 5, z - 150, x, 5, z + 150); } // 찍은 첫째 점
+  for (const b of M.wallBoxes(room, proj.openings, proj.blocks)) { const m = box(b, b.kind === 'glass' ? GLASS : room.wall); m.userData = { wall: b.wall, top: b.kind === 'top' }; world.add(m); if (b.kind === 'block' && b.id === selBlock()?.id) world.add(outline(b, L.sel)); } // 기둥(block)은 wall이 없어 늘 보인다
   for (const o of proj.openings) {
     const on = ui.sel?.id === o.id;
     if (o.type === 'door') { // 바닥에 문 열림 궤적
@@ -152,7 +164,8 @@ function rebuild() {
   while (box.children.length < labels.length) box.append(document.createElement('div'));
   [...box.children].forEach((el, i) => { el.hidden = !labels[i]; if (labels[i]) { el.textContent = labels[i].text; el.className = labels[i].cls; } });
   const n = ui.mode === 'room' ? bad.items.size : 0;
-  $('#hud').innerHTML = n ? `<span class="chip bad">겹침·막힘 ${n}</span>`
+  const pk = ui.pick && (ui.pick.kind === 'origin' ? '그림 속 방의 왼쪽 위 모서리를 찍으세요' : ui.pick.pts.length ? '둘째 점을 찍으세요' : '첫째 점을 찍으세요');
+  $('#hud').innerHTML = pk ? `<span class="chip pick">${pk}</span> <button class="btn" data-a="desel">취소</button>` : n ? `<span class="chip bad">겹침·막힘 ${n}</span>`
     : gizmo.object ? `<div class="seg">${[['translate', '이동'], ['rotate', '회전']].map(([v, t]) => `<button data-a="gmode" data-v="${v}"${v === gizmo.mode ? ' class="on"' : ''}>${t}</button>`).join('')}</div>` : ''; // 고른 부품을 끌 때: 화살표(이동) / 고리(회전)
   world.updateMatrixWorld(true); // 다음 프레임을 그리기 전에 눌러도 새 물체가 잡히게
   invalidate();
@@ -203,7 +216,7 @@ function setView() { // 평면 = 바로 위에서 보는 정사영(회전 잠금
   fit(); rebuild();
 }
 function go(mode, defId) { // defId: 생략 = 지금 것 유지, null = 새 가구 고르기 화면
-  Object.assign(ui, { mode, sel: null, partId: null, defId: defId !== undefined ? defId : curDef() ? ui.defId : proj.library[0]?.id ?? null });
+  Object.assign(ui, { mode, sel: null, partId: null, pick: null, defId: defId !== undefined ? defId : curDef() ? ui.defId : proj.library[0]?.id ?? null });
   setView(); renderPanel();
 }
 const scheme = matchMedia('(prefers-color-scheme: dark)');
@@ -221,7 +234,7 @@ function hitTest(e) {
   let o = h.object; while (o.parent !== world) o = o.parent;
   return { data: o.userData, point: h.point };
 }
-function place(it, x, z) { // 벽·다른 가구 가장자리가 40mm 안이면 거기에 붙이고, 아니면 격자에 맞춘다
+function place(it, x, z) { // 벽·다른 가구·기둥 가장자리가 40mm 안이면 거기에 붙이고, 아니면 격자에 맞춘다
   const s = M.shape(proj, it), g = proj.room.snap || 1;
   const others = proj.items.filter(o => o !== it).map(o => M.shape(proj, o));
   const fix = (c, lo, hi, edges) => { // lo·hi: 중심에서 양쪽 가장자리까지. 비스듬히 놓은 가구는 둘이 다를 수 있다
@@ -229,7 +242,7 @@ function place(it, x, z) { // 벽·다른 가구 가장자리가 40mm 안이면 
     for (const e of edges) for (const v of [e + lo, e - hi]) if (Math.abs(v - c) < best) { best = Math.abs(v - c); out = v; } // 자석이 격자보다 먼저: 격자에 걸려 오른쪽·아래쪽 벽을 놓치지 않게
     return out;
   };
-  return [fix(x, it.x - s.minx, s.maxx - it.x, [0, proj.room.w, ...others.flatMap(o => [o.minx, o.maxx])]), fix(z, it.z - s.minz, s.maxz - it.z, [0, proj.room.d, ...others.flatMap(o => [o.minz, o.maxz])])];
+  return [fix(x, it.x - s.minx, s.maxx - it.x, [0, proj.room.w, ...others.flatMap(o => [o.minx, o.maxx]), ...proj.blocks.flatMap(b => [b.x, b.x + b.w])]), fix(z, it.z - s.minz, s.maxz - it.z, [0, proj.room.d, ...others.flatMap(o => [o.minz, o.maxz]), ...proj.blocks.flatMap(b => [b.z, b.z + b.d])])];
 }
 
 // 터치는 "고른 가구만 끌린다"(화면 돌리기와 헷갈리지 않게), 마우스는 바로 끈다. capture라 OrbitControls보다 먼저 판단한다
@@ -237,7 +250,7 @@ let down = null, drag = null, gz = 0;
 canvas.addEventListener('pointerdown', e => {
   if (!e.isPrimary) return;
   down = { x: e.clientX, y: e.clientY };
-  if (ui.mode !== 'room' || viewing) return;
+  if (ui.mode !== 'room' || viewing || ui.pick) return; // 점 찍기 중에는 가구를 끌지 않는다(화면 이동·확대는 된다)
   const h = hitTest(e), id = h?.data.item;
   if (!id || !(e.pointerType === 'mouse' ? e.button === 0 : ui.sel?.id === id)) return;
   const it = proj.items.find(i => i.id === id);
@@ -263,9 +276,20 @@ function up(e) {
   if (was) { controls.enabled = true; if (was.moved) return refresh(); }
   if (gz) { gz = 0; return; } // 방금 화살표(gizmo)를 눌렀다
   if (!tap || viewing) return;
+  if (ui.pick) return pickAt(e);
   const h = hitTest(e);
   if (ui.mode === 'room') ui.sel = h ? { type: 'item', id: h.data.item } : null; else if (ui.mode === 'design') ui.partId = h?.data.part ?? null; // 가구 관리 화면은 미리보기만
   rebuild(); renderPanel();
+}
+function pickAt(e) { // 밑그림 점 찍기: 누른 곳과 바닥(y = 0)의 교점
+  cast(e); plane.constant = 0;
+  if (!ray.ray.intersectPlane(plane, pt)) return;
+  const p = [pt.x, pt.z], k = ui.pick;
+  if (k.kind === 'scale' && !k.pts.length) { k.pts.push(p); return rebuild(); }
+  ui.pick = null;
+  if (k.kind === 'origin') return commit(() => { proj.bg = M.bgMove(proj.bg, p); });
+  const dist = +String(prompt('두 점 사이의 실제 거리(mm)') ?? '').replace(/,/g, '');
+  if (dist > 0) commit(() => { proj.bg = M.bgScale(proj.bg, k.pts[0], p, dist); }); else rebuild();
 }
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 // iOS: 캔버스를 길게 누르면 사파리가 자체 제스처로 받아 그다음 첫 탭을 삼킨다. 기본 처리를 꺼도 포인터 이벤트는 그대로 온다
@@ -307,7 +331,7 @@ function filterQ() {
   body.querySelectorAll('.grp').forEach(g => { g.hidden = !g.querySelector('[data-n]:not([hidden])'); }); // 비게 된 분류 소제목도 숨긴다
 }
 function roomPanel() {
-  const it = selItem(), o = selOpen(), { room } = proj;
+  const it = selItem(), o = selOpen(), bl = selBlock(), { room } = proj;
   if (it) {
     const d = M.defOf(proj, it), s = M.shape(proj, it);
     return `${head(d.name, size(s.b) + ' mm', bad.items.get(it.id) || (M.openZones(proj, it).some(z => z.blocked) && '열림 막힘'))}
@@ -322,7 +346,10 @@ function roomPanel() {
       ${door ? sel('경첩', 'open.hinge', o.hinge, [['a', ends[0]], ['b', ends[1]]]) + sel('열림', 'open.swing', o.swing, [['in', '방 안쪽으로'], ['out', '바깥쪽·미닫이']]) : fld('바닥에서', 'open.sill', o.sill)}</div>
       <div class="row">${btn('삭제', 'del', '', 'danger')}</div>`;
   }
-  return tabs('tab', [['add', '가구'], ['room', '방'], ['open', '문·창문']]) + {
+  if (bl) return `${head('기둥·붙박이', `${fmt(bl.w)} × ${fmt(bl.d)} × ${fmt(bl.h)} mm`)}
+      <div class="grid">${fld('왼쪽 벽에서', 'block.x', bl.x)}${fld('위쪽 벽에서', 'block.z', bl.z)}${fld('가로', 'block.w', bl.w, 'mm', 50)}${fld('세로', 'block.d', bl.d, 'mm', 50)}${fld('높이', 'block.h', bl.h, 'mm', 50)}</div>
+      <div class="row">${btn('삭제', 'del', '', 'danger')}</div>`;
+  return tabs('tab', [['add', '가구'], ['room', '방'], ['open', '문·창문·기둥']]) + {
     add: () => `${search}${tabs('cat', ['전체', '내 가구', ...CATS].map(c => [c, c]), 'chips')}
       ${['전체', '내 가구'].includes(ui.cat) ? `<div class="grp"><h3>내 가구</h3><div class="cards">${proj.library.map(d => `<div class="card" data-n="${esc(d.name.toLowerCase())}"><button data-a="add" data-id="${esc(d.id)}"><b>${esc(d.name)}</b><small>${size(M.bounds(M.partsOf(d)))}</small></button><button class="mini" data-a="mode" data-v="design" data-id="${esc(d.id)}">설계</button></div>`).join('')}
       <div class="card new" data-n=""><button data-a="newDefUI">＋ 새 가구</button></div></div></div>` : ''}
@@ -330,10 +357,15 @@ function roomPanel() {
       <p class="hint">가구 목록은 모든 방이 함께 씁니다(설계를 고치면 다른 방에 놓인 것도 바뀝니다). 가구를 누르면 방의 빈자리에 놓입니다. 놓인 가구는 눌러서 고른 뒤 끌어 옮깁니다(마우스는 바로 끌기).</p>
       <p class="hint">규격 가구는 대표 치수입니다. 놓은 뒤 '설계 수정'에서 실제 제품 치수로 고치세요.</p>`,
     room: () => `<div class="grid">${text('방 이름', 'proj.name', proj.name)}${fld('가로', 'room.w', room.w)}${fld('세로', 'room.d', room.d)}${fld('천장 높이', 'room.h', room.h)}
-      ${sel('끌기 격자', 'room.snap', String(room.snap), [['0', '없음'], ['10', '10 mm'], ['50', '50 mm'], ['100', '100 mm']])}${colorFld('벽', 'room.wall', room.wall)}${colorFld('바닥', 'room.floor', room.floor)}</div>`,
-    open: () => `${proj.openings.length ? `<div class="list">${proj.openings.map(o => `<button data-a="pick" data-id="${esc(o.id)}"><span>${o.type === 'door' ? '문' : '창문'} · ${WALLS.find(w => w[0] === o.wall)[1]}</span><small>${fmt(o.w)} × ${fmt(o.h)}</small></button>`).join('')}</div>` : '<p class="hint">아직 문이나 창문이 없습니다.</p>'}
-      <div class="row">${btn('＋ 문', 'addOpen', 'data-v="door"')}${btn('＋ 창문', 'addOpen', 'data-v="window"')}</div>
-      <p class="hint">안쪽으로 열리는 문은 열림 궤적 안에 가구가 있으면 경고합니다.</p>`,
+      ${sel('끌기 격자', 'room.snap', String(room.snap), [['0', '없음'], ['10', '10 mm'], ['50', '50 mm'], ['100', '100 mm']])}${colorFld('벽', 'room.wall', room.wall)}${colorFld('바닥', 'room.floor', room.floor)}</div>
+      <h3>밑그림</h3>${(g => g ? `<div class="grid">${fld('그림 가로(실제)', 'bg.w', Math.round(g.w), 'mm', 100)}${fld('왼쪽에서', 'bg.x', Math.round(g.x), 'mm', '')}${fld('위에서', 'bg.z', Math.round(g.z), 'mm', '')}${sel('진하기', 'bg.op', String(g.op), [.2, .4, .6, .8, 1].map(v => [String(v), v * 100 + '%']))}</div>
+      <div class="row">${btn('두 점으로 축척 맞추기', 'pickBg', 'data-v="scale"')}${btn('방 모서리 맞추기', 'pickBg', 'data-v="origin"')}${btn('밑그림 지우기', 'bgDel', '', 'danger')}</div>
+      <p class="hint">그림에서 길이를 아는 벽의 양 끝을 찍고 실제 길이를 넣으면 축척이 맞습니다. 그다음 그림 속 이 방의 왼쪽 위 안쪽 모서리를 찍으면 위치가 맞습니다. 방 치수는 '방' 탭의 가로·세로로 그림에 맞추세요.</p>` : '')(proj.bg)}
+      <div class="row">${btn('평면도 그림 불러오기', 'bgLoad')}</div>`,
+    open: () => `${proj.openings.length || proj.blocks.length ? `<div class="list">${proj.openings.map(o => `<button data-a="pick" data-t="open" data-id="${esc(o.id)}"><span>${o.type === 'door' ? '문' : '창문'} · ${WALLS.find(w => w[0] === o.wall)[1]}</span><small>${fmt(o.w)} × ${fmt(o.h)}</small></button>`).join('')}${proj.blocks.map(b => `<button data-a="pick" data-t="block" data-id="${esc(b.id)}"><span>기둥·붙박이</span><small>${fmt(b.w)} × ${fmt(b.d)}</small></button>`).join('')}</div>` : '<p class="hint">아직 문·창문·기둥이 없습니다.</p>'}
+      <div class="row">${btn('＋ 문', 'addOpen', 'data-v="door"')}${btn('＋ 창문', 'addOpen', 'data-v="window"')}${btn('＋ 기둥·붙박이', 'addBlock')}</div>
+      <p class="hint">안쪽으로 열리는 문은 열림 궤적 안에 가구가 있으면 경고합니다.</p>
+      <p class="hint">방 모서리에 붙이면 ㄱ자 방처럼 쓸 수 있습니다. 가구는 기둥과 겹치면 경고합니다.</p>`,
   }[ui.tab]();
 }
 const usedN = id => store.projects.reduce((n, r) => n + r.items.filter(i => i.def === id).length, 0); // 모든 방에 놓인 개수
@@ -392,6 +424,8 @@ const SET = { // data-f="범위.키" 입력이 바뀌면 호출 (v: 숫자로 �
   proj: (k, v, raw) => { proj.name = raw; },
   room: (k, v) => { proj.room[k] = v; },
   open: (k, v) => { selOpen()[k] = v; },
+  block: (k, v) => { selBlock()[k] = v; },
+  bg: (k, v) => { proj.bg[k] = v; },
   item: (k, v) => { const it = selItem(), s = M.shape(proj, it); if (k === 'rot' || k === 'y') it[k] = v; else if (k === 'left') it.x += v - s.minx; else it.z += v - s.minz; },
   def: (k, v, raw) => { curDef().name = raw; },
   param: (k, v) => { const d = curDef(); d.params = { ...d.params, [k]: v }; },
@@ -447,16 +481,20 @@ const ACT = {
   fit, undo: () => travel(hist.undo, hist.redo), redo: () => travel(hist.redo, hist.undo),
   fold: () => document.body.classList.toggle('folded'),
   set: d => apply(d.f, d.v),
-  desel: () => { ui.sel = null; ui.partId = null; rebuild(); renderPanel(); },
-  pick: d => { ui.sel = { type: 'open', id: d.id }; rebuild(); renderPanel(); },
+  desel: () => { ui.sel = null; ui.partId = null; ui.pick = null; rebuild(); renderPanel(); }, // 밑그림 점 찍기 [취소]·Esc도 여기
+  pick: d => { ui.sel = { type: d.t, id: d.id }; rebuild(); renderPanel(); }, // t: open | block
   // 방
   add: d => addItem({ def: d.id, x: 0, z: 0, rot: 0 }),
   addCat: d => addItem(() => ({ def: M.useDef(proj.library, CATALOG[d.i]).id, x: 0, z: 0, rot: 0 })), // 규격 가구: 공용 목록에 넣고(있으면 그것) 놓는다
   dup: () => addItem(selItem()),
   rot: d => commit(() => { selItem().rot += +d.v; }),
   onTop: () => commit(() => { const it = selItem(), s = M.shape(proj, it); it.y = Math.max(0, ...proj.items.filter(o => o !== it).map(o => M.shape(proj, o)).filter(t => M.overlap(s.poly, t.poly)).map(t => t.y1)); }), // 발자국이 겹치는 가구 중 가장 높은 윗면으로
-  del: () => commit(() => { proj.items = proj.items.filter(i => i.id !== ui.sel.id); proj.openings = proj.openings.filter(o => o.id !== ui.sel.id); }),
+  del: () => commit(() => { proj.items = proj.items.filter(i => i.id !== ui.sel.id); proj.openings = proj.openings.filter(o => o.id !== ui.sel.id); proj.blocks = proj.blocks.filter(b => b.id !== ui.sel.id); }),
   addOpen: d => commit(() => { const o = M.fixOpening(proj.room, { type: d.v, wall: 'N', pos: (proj.room.w - 900) / 2 }); proj.openings.push(o); ui.sel = { type: 'open', id: o.id }; }),
+  addBlock: () => commit(() => { const b = M.fixBlock(proj.room, { x: 200, z: 200 }); proj.blocks.push(b); ui.sel = { type: 'block', id: b.id }; }), // 400 × 400 × 방 높이
+  bgLoad: () => $('#img').click(),
+  pickBg: d => { Object.assign(ui, { pick: { kind: d.v, pts: [] }, sel: null }); if (ui.view === 'plan') rebuild(); else { ui.view = 'plan'; setView(); } renderPanel(); },
+  bgDel: () => commit(() => { delete proj.bg; }),
   // 가구 설계
   newDefUI: () => go('design', null),
   newDef: d => { commit(() => {
@@ -508,7 +546,7 @@ const ACT = {
   start: () => { // 첫 화면 "이 치수로 시작": 예시 방을 빼고 그 치수의 빈 방으로(공용 가구 목록은 그대로). 값 범위는 sanitize가 맞춘다
     const v = k => { const el = $(`#start [name=${k}]`); return el.value || el.defaultValue; }, p = M.newProject('내 방', false, store.library); // 빈 칸은 보이던 기본값으로
     Object.assign(p.room, { w: v('w'), d: v('d'), h: v('h') }); store.projects = [p]; openProject(p); fresh = false;
-    toast('문·창문 탭에서 문과 창을 넣어 보세요');
+    toast('문·창문·기둥 탭에서 문과 창을 넣어 보세요');
   },
   dae: () => { const d = designDef(); download((d || proj).name + '.dae', M.toDAE(M.exportNodes(proj, d)), 'model/vnd.collada+xml'); },
   csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows, M.buyList(M.partsOf(d))), 'text/csv'); }, // BOM: 엑셀 한글
@@ -568,6 +606,23 @@ $('#file').addEventListener('change', async e => {
     return toast(proj.library.length > n ? `가구 ${proj.library.length - n}개를 불러왔습니다` : '새로 더할 가구가 없습니다');
   }
   addProject(p); toast(`"${p.name}" 방을 불러왔습니다`);
+});
+$('#img').addEventListener('change', e => { // 평면도 그림 → 긴 변 1600px 이하 JPEG(투명은 흰 바탕). 그래도 크면 더 줄인다
+  const f = e.target.files[0], img = new Image();
+  e.target.value = '';
+  if (!f || viewing) return;
+  img.onerror = () => { URL.revokeObjectURL(img.src); toast('읽을 수 없는 그림입니다'); };
+  img.onload = () => {
+    URL.revokeObjectURL(img.src);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    if (!W || !H) return toast('읽을 수 없는 그림입니다');
+    const shrink = px => { const k = Math.min(1, px / Math.max(W, H)), cv = document.createElement('canvas'), c = cv.getContext('2d'); cv.width = Math.max(1, Math.round(W * k)); cv.height = Math.max(1, Math.round(H * k)); c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height); c.drawImage(img, 0, 0, cv.width, cv.height); return cv.toDataURL('image/jpeg', .8); };
+    let px = 1600, src = shrink(px);
+    while (src.length > M.BGMAX && (px = Math.round(px * .7)) >= 400) src = shrink(px);
+    if (src.length > M.BGMAX) return toast('그림이 너무 큽니다');
+    commit(() => { proj.bg = { src, ar: H / W, x: 0, z: 0, w: proj.room.w, op: .6 }; });
+  };
+  img.src = URL.createObjectURL(f);
 });
 addEventListener('keydown', e => {
   if (e.target.matches('input,select,textarea') || menu.open || viewing) return;

@@ -33,16 +33,18 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 - 다른 곳에서 온 목록(백업 파일, 가구만 내보낸 파일, v1 저장본)은 `adopt(library, p)`로 합친다. 내용이 같으면 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id를 주며 `p.items[].def`도 따라 바꾼다.
 - 규격 가구는 `useDef(library, entry)`로 공용 목록에 넣는다(내용이 같은 것이 있으면 그것, 없으면 새 id로 push). `findDef`는 찾기만 한다. 견주기는 `adopt`와 같은 `same`이라 sanitize가 만드는 모양(키 순서, 다 채운 params)으로 만들어 견준다. 목록에 이미 있는 규격 항목은 가구 탭에서 숨긴다.
 - `sanitize(raw)`가 유일한 검증 지점이다. 저장본·불러온 JSON뿐 아니라 매 변경 뒤에도 돈다. 새 필드를 추가하면 여기서 형태·범위를 맞춰야 저장·불러오기·되돌리기에서 살아남는다.
-- 저장: localStorage `funmodel-v2`. 형식은 `dumpStore`(쓰기)·`readStore`(읽기, v1도 같은 경로)이고 이것이 곧 전체 백업 파일이다. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다. 둘 다 없으면(`fresh`) 예시 방 위에 첫 화면 `<dialog id="start">`(방 치수로 시작 / 예시 둘러보기)를 띄우고, 닫힐 때까지 `flush`가 저장하지 않는다(`locked`와 따로).
+- 방의 고정 요소 `proj.blocks = [{ id, x, z, w, d, h }]`(기둥·붙박이): 방 좌표의 축 정렬 상자, x,z = 최소 모서리, h = 바닥부터(기본 방 높이). `fixBlock`이 범위를 맞춘다. `wallBoxes(room, openings, blocks)`가 `kind: 'block'`(wall 없음)으로 덧붙여 벽과 같이 그리고 내보낸다.
+- 밑그림 `proj.bg = { src, ar, x, z, w, op }`(없으면 키가 없다): 줄인 그림의 data URL(png·jpeg·webp, `BGMAX` 이하), 세로/가로 비, 그림 왼쪽 위의 방 좌표, 그림 가로의 실제 mm, 불투명도. 소수를 유지한다(`real`). 축척·위치는 `bgScale`·`bgMove`. 공유 링크(`encodeShare`)에서는 뺀다.
+- 저장: localStorage `funmodel-v2`. 저장본 형식 `VER` = 3(blocks·bg가 생김. 예전 앱이 새 필드를 지운 채 덮어쓰지 않게 올렸다. 없는 필드는 기본값이라 v 없음·2도 그대로 읽는다). 형식은 `dumpStore`(쓰기)·`readStore`(읽기, v1도 같은 경로)이고 이것이 곧 전체 백업 파일이다. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다. 둘 다 없으면(`fresh`) 예시 방 위에 첫 화면 `<dialog id="start">`(방 치수로 시작 / 예시 둘러보기)를 띄우고, 닫힐 때까지 `flush`가 저장하지 않는다(`locked`와 따로).
 - 버전: 저장본의 `v`가 `VER`보다 크면(더 새 앱이 씀) 예시로 시작하고 `flush`가 저장하지 않는다(`locked`). 불러온 파일이면 거절한다. 저장본을 못 읽으면 예시로 덮어쓰기 전에 원문을 `funmodel-v2-bad`에 옮긴다.
 - 전체 백업 불러오기는 `mergeStore`: 지우지 않고 더한다. 가구는 `adopt`, 방은 내용이 같으면 건너뛰고 id만 겹치면 새 id. 원판 설정은 그대로 두고, 되돌리기 기록은 비운다.
 - 공유 링크: `#room=` 뒤에 base64url(deflate-raw(JSON `{ v, ...방 }`)). 방의 library에는 놓인 가구의 정의만 싣는다. `encodeShare(proj)`·`decodeShare(str)`(비동기, 더 새 버전이면 `{ newer: true }`, 못 읽으면 null, 풀린 크기 2MB에서 끊음)가 model.js에 있다.
 - 원판 설정 `store.cut = { L, W, kerf }`(판재 배치용, `cutOpts`가 범위를 맞춘다)은 공구 설정이라 저장본 최상위에 있다. 방 백업(.json)에는 들어가지 않고 되돌리기 대상도 아니다.
 
 ### 간섭 판정 (`checker`, `conflicts`)
-가구마다 `'벽 밖' | '천장 넘음' | '문 막음' | '겹침' | null`(앞에 있는 것이 먼저). 감싸는 사각형이 아니라 부품 단위의 기운 상자(OBB 분리축)로 본다(책상 밑 의자는 통과). 윗면이 바닥에서 30mm 이하(러그)면 겹침에서 빠진다. 안쪽으로 열리는 문은 열림 부채꼴(`doorZone`)과 부품의 바닥 그림자를 견준다.
+가구마다 `'벽 밖' | '천장 넘음' | '문 막음' | '겹침' | null`(앞에 있는 것이 먼저). 감싸는 사각형이 아니라 부품 단위의 기운 상자(OBB 분리축)로 본다(책상 밑 의자는 통과). 윗면이 바닥에서 30mm 이하(러그)면 겹침에서 빠진다. 기둥(`blocks`)은 가짜 모양(`blockShape`, id 자리는 null)으로 같은 목록에 넣어 높이까지 본다. 방 문의 열림 부채꼴과는 견주지 않는다(구조는 원래 그 자리에 있다). 안쪽으로 열리는 문은 열림 부채꼴(`doorZone`)과 부품의 바닥 그림자를 견준다.
 
-가구 자신의 문·서랍이 열리는 공간은 `openZones(proj, it)`가 따로 본다(`role`이 붙은 부품만). 고른 가구에만 바닥 선과 "열림 막힘" 표시로 보여 주고, `conflicts`와 경고 색에는 넣지 않는다. 책상 서랍 앞의 의자처럼 일부러 둔 배치가 흔해서다.
+가구 자신의 문·서랍이 열리는 공간은 `openZones(proj, it)`가 따로 본다(`role`이 붙은 부품만, 기둥도 막는 것으로 본다). 고른 가구에만 바닥 선과 "열림 막힘" 표시로 보여 주고, `conflicts`와 경고 색에는 넣지 않는다. 책상 서랍 앞의 의자처럼 일부러 둔 배치가 흔해서다.
 
 ### 화면 흐름 (app.js)
 - 모든 변경은 `commit(fn)`: 되돌리기용으로 `proj`를 JSON 스냅숏 → `fn`이 `proj`를 직접 고침 → `refresh()` = `sanitize` → 장면 `rebuild()` → `renderPanel()` → 400ms 뒤 저장. 되돌리기 기록은 방 단위이고 방을 바꾸면 비워진다.
@@ -54,6 +56,8 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 - 모드 `ui.mode`: `room`(배치) / `lib`(가구 관리, 미리보기만) / `design`(설계). 보기 `ui.view`: `3d` / `plan`(정사영, 회전 잠금). 장면은 변경 때마다 통째로 다시 만들고, 그리기는 `invalidate()`로 필요할 때만 한다.
 - 공유 링크로 열면 보기 상태(`viewing`, 모듈 최상위 await로 풀고 시작)다. 받은 방이 `proj`지만 store에는 넣지 않는다: `setProj`는 store를 건드리지 않고 `flush`·`commit`·되돌리기·끌기·고르기·키보드가 막힌다. `body.viewing`이 패널과 헤더의 `.edit` 버튼을 숨기고 `#shared` 막대를 보인다. [내 방으로 복사]는 파일에서 방을 불러올 때와 같은 `addProject`를 쓴다.
 - 평면도는 `planSVG`(치수 포함) 하나를 PNG(이미지로 읽어 캔버스에)와 인쇄(`#print`에 넣고 `window.print()`)가 같이 쓴다.
+- 선택 `ui.sel = { type: 'item' | 'open' | 'block', id }`. 기둥은 끌지 않고 패널의 치수 입력으로만 옮긴다.
+- 밑그림 점 찍기 `ui.pick = { kind: 'scale' | 'origin', pts }`: 평면 보기로 바꾸고 #hud에 안내와 [취소]. 그동안 캔버스 탭은 바닥(y = 0) 교점만 받고 가구를 고르거나 끌지 않는다. Esc·취소(`desel`)·모드·방 전환(`go`)·bg가 없어지면(`refresh`) 끝난다. 밑그림 텍스처는 `src` 하나만 캐시하고(`bgTex`) 그림이 바뀔 때 dispose한다.
 - 터치는 "이미 고른 가구만 끌린다", 마우스는 바로 끈다(화면 돌리기와 구분). 설계 화면의 부품은 TransformControls로 옮기거나 돌린다.
 
 ## 관례

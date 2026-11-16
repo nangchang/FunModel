@@ -19,6 +19,8 @@ button { cursor: pointer; }
 button:disabled { opacity: .4; cursor: default; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 [hidden] { display: none !important; }
+/* 줄을 명시: 브라우저 확장이 body에 끼워 넣는 요소가 자동 배치를 밀어내지 않게 */
+header { grid-row: 1; } #stage { grid-row: 2; } #panel { grid-row: 3; }
 
 header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--surface); border-bottom: 1px solid var(--line); }
 .sp { flex: 1; }
@@ -54,7 +56,7 @@ body.folded #panel { height: auto; }
 @media (min-width: 900px) {
   body { grid-template: auto minmax(0, 1fr) / minmax(0, 1fr) 380px; }
   header { grid-column: 1 / -1; }
-  #panel, body.folded #panel { height: auto; border-top: 0; border-left: 1px solid var(--line); }
+  #panel, body.folded #panel { grid-area: 2 / 2; height: auto; border-top: 0; border-left: 1px solid var(--line); }
   #grab { display: none; }
   #pbody, body.folded #pbody { display: flex; padding-top: 14px; }
 }

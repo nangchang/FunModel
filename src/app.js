@@ -15,10 +15,10 @@ function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem('funmodel-v1')), library = [];
     const projects = s.projects.map(p => M.sanitize({ library: s.library, ...p })).filter(Boolean).map(p => M.adopt(library, p));
-    if (projects.length) return { cur: s.cur, library, projects };
+    if (projects.length) return { cur: s.cur, library, projects, cut: M.cutOpts(s.cut) };
   } catch { /* 저장본이 없거나 깨졌으면 예시로 시작 */ }
   const p = M.newProject('침실 예시', true);
-  return { library: p.library, projects: [p] };
+  return { library: p.library, projects: [p], cut: M.cutOpts() };
 }
 const store = load();
 let proj = store.projects.find(p => p.id === store.cur) || store.projects[0];
@@ -334,9 +334,13 @@ function designPanel() {
     : `<div class="grid">${(pv => M.KINDS[d.kind].fields.map(f => (f.color ? colorFld(f.label, 'param.' + f.k, pv[f.k]) : fld(f.label, 'param.' + f.k, pv[f.k], f.unit, f.min))).join(''))(M.paramsOf(d))}</div>
       <p class="hint">부품 ${parts.length}개가 치수에서 자동으로 만들어집니다. 부품을 하나씩 고치려면 직접 편집으로 바꾸세요. 바꾼 뒤에는 치수 폼을 쓸 수 없습니다(되돌리기는 가능).</p>
       <div class="row">${btn('부품 직접 편집으로 전환', 'toCustom')}</div>`;
-  const cut = () => { const { rows, area } = M.cutList(parts); return `<table class="cut"><tr><th>부품</th><th>길이</th><th>폭</th><th>두께</th><th>수량</th></tr>
+  const cut = () => { const { rows, area } = M.cutList(parts), buy = M.buyList(parts), groups = M.nest(rows, store.cut); return `<table class="cut"><tr><th>부품</th><th>길이</th><th>폭</th><th>두께</th><th>수량</th></tr>
     ${rows.map(r => `<tr><td><i class="dot" style="background:${r.color}"></i>${esc(r.name)}</td><td>${r.L}</td><td>${r.W}</td><td>${r.T}</td><td>${r.n}</td></tr>`).join('')}</table>
-    <p class="hint">두께 40mm 이하 판재 면적 ${area.toFixed(2)} m². 톱날 두께·여유분은 넣지 않았고, 손잡이·매트리스·방석은 뺐습니다.</p><div class="row">${btn('CSV로 저장', 'csv')}</div>`; };
+    ${buy.length ? `<table class="cut"><tr><th>구매품</th><th>규격</th><th>수량</th></tr>${buy.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.spec)}</td><td>${r.n}</td></tr>`).join('')}</table>` : ''}
+    <p class="hint">두께 40mm 이하 판재 면적 ${area.toFixed(2)} m². 원판 가장자리 다듬는 여유는 넣지 않았고, 손잡이·매트리스·방석은 구매 목록으로 뺐습니다. 경첩 수는 문 높이 기준 어림입니다.</p><div class="row">${btn('CSV로 저장', 'csv')}</div>
+    <div class="grid">${fld('원판 길이', 'cut.L', store.cut.L, 'mm', 300)}${fld('원판 폭', 'cut.W', store.cut.W, 'mm', 300)}${fld('톱날 두께', 'cut.kerf', store.cut.kerf)}</div>
+    ${groups.map(g => `<p class="hint">${g.T}mm ${esc(M.colorName(g.color))} — 원판 ${g.sheets.length}장${g.over.length ? ` · 원판보다 큰 조각 ${g.over.length}개는 뺌` : ''}</p>`).join('')}
+    ${groups.some(g => g.sheets.length) ? `<div class="nest">${M.nestSVG(groups, store.cut)}</div><div class="row">${btn('배치도 저장 (.svg)', 'nestSvg')}</div>` : ''}`; };
   return `<div class="grid">${sel('가구', 'ui.defId', d.id, proj.library.map(x => [x.id, x.name]))}${text('이름', 'def.name', d.name)}</div>
     <div class="row">${btn('방에 놓기', 'place', '', 'pri')}${btn('＋ 새 가구', 'newDefUI')}${btn('복제', 'dupDef')}${btn(used ? `삭제 (모든 방에 놓인 ${used}개도)` : '삭제', 'delDef', '', 'danger')}</div>
     ${tabs('dtab', [['edit', custom ? '부품' : '치수'], ['cut', '재단 목록']])}${ui.dtab === 'cut' ? cut() : edit}`;
@@ -368,6 +372,7 @@ const SET = { // data-f="범위.키" 입력이 바뀌면 호출 (v: 숫자로 �
 function apply(f, raw) {
   const [s, k] = f.split('.');
   if (s === 'ui') { ui[k] = raw; ui.partId = null; fit(); rebuild(); return renderPanel(); }
+  if (s === 'cut') { store.cut = M.cutOpts({ ...store.cut, [k]: raw }); save(); return renderPanel(); } // 공구 설정: 되돌리기 대상이 아니다
   commit(() => SET[s](k, raw.trim() !== '' && isFinite(raw) ? +raw : raw, raw));
 }
 function freeSpot(it) { // 방 가운데에서 가까운 순으로 100mm 격자를 훑어 처음 나오는 빈자리
@@ -455,7 +460,7 @@ const ACT = {
     const d = designDef();
     menu.innerHTML = `<div><h3>방</h3><div class="list">${store.projects.map(p => `<button data-a="proj" data-id="${esc(p.id)}"${p === proj ? ' class="on"' : ''}><span>${esc(p.name)}</span><small>${fmt(p.room.w)} × ${fmt(p.room.d)}</small></button>`).join('')}</div>
       <div class="row">${btn('＋ 새 방', 'newProj')}${btn('이 방 복제', 'dupProj')}${btn('이 방 삭제', 'delProj', '', 'danger')}</div>
-      <h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') : btn('평면도 (.png)', 'png')}</div>
+      <h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg') : btn('평면도 (.png)', 'png')}</div>
       <h3>백업 — 이 방과 가구 목록</h3><div class="row">${btn('파일로 저장 (.json)', 'json')}${btn('파일에서 불러오기', 'import')}</div></div>`;
     menu.showModal();
   },
@@ -469,7 +474,9 @@ const ACT = {
     openProject(store.projects[0]);
   },
   dae: () => { const d = designDef(); download((d || proj).name + '.dae', M.toDAE(M.exportNodes(proj, d)), 'model/vnd.collada+xml'); },
-  csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows), 'text/csv'); }, // BOM: 엑셀 한글
+  csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows, M.buyList(M.partsOf(d))), 'text/csv'); }, // BOM: 엑셀 한글
+  nestSvg: () => { const d = curDef(); download(d.name + ' 판재배치.svg', M.nestSVG(M.nest(M.cutList(M.partsOf(d)).rows, store.cut), store.cut), 'image/svg+xml'); },
+  svg: () => { const d = curDef(); download(d.name + ' 도면.svg', M.drawingSVG(d), 'image/svg+xml'); },
   png: planPNG,
   json: () => download(proj.name + '.json', JSON.stringify(proj, null, 1), 'application/json'),
   lib: () => download('가구 목록.json', JSON.stringify({ library: proj.library }, null, 1), 'application/json'), // 방 없이 가구만

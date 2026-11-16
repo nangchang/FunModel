@@ -27,10 +27,12 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 ### 데이터 모델
 - 가구 정의(def)는 두 종류: `KINDS`의 생성기(`kind` + `params`, `fields`가 폼·기본값·범위를 정함) 또는 `kind: 'custom'`(`parts` 직접 편집). `partsOf(def)`가 부품 목록을 준다.
 - `partsOf`는 `def.params` 객체를 키로 WeakMap 캐시한다. 치수를 바꿀 때는 params를 고치지 말고 새 객체로 갈아 끼운다(`d.params = { ...d.params, [k]: v }`).
+- 부품의 선택 표시 두 가지: `hw`(사서 쓰는 것. 재단 목록에서 빠지고 구매 목록에 들어간다), `role`(`'doorL' | 'doorR' | 'drawer'`, L·R은 경첩 쪽). 생성기만 붙이고 `part()`는 허용 값만 남긴다. `buyList`가 이것으로 경첩·서랍 레일 수를 센다.
 - 가구 목록(library)은 방과 따로 하나뿐이고 모든 방이 함께 쓴다. 메모리에서는 `store.library`와 지금 방의 `proj.library`가 같은 배열이다(`setProj`). 저장할 때는 방에서 library를 빼고 최상위에 한 번만 쓴다.
 - 다른 곳에서 온 목록(백업 파일, 가구만 내보낸 파일, v1 저장본)은 `adopt(library, p)`로 합친다. 내용이 같으면 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id를 주며 `p.items[].def`도 따라 바꾼다.
 - `sanitize(raw)`가 유일한 검증 지점이다. 저장본·불러온 JSON뿐 아니라 매 변경 뒤에도 돈다. 새 필드를 추가하면 여기서 형태·범위를 맞춰야 저장·불러오기·되돌리기에서 살아남는다.
 - 저장: localStorage `funmodel-v2`. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다.
+- 원판 설정 `store.cut = { L, W, kerf }`(판재 배치용, `cutOpts`가 범위를 맞춘다)은 공구 설정이라 저장본 최상위에 있다. 방 백업(.json)에는 들어가지 않고 되돌리기 대상도 아니다.
 
 ### 간섭 판정 (`checker`, `conflicts`)
 가구마다 `'벽 밖' | '문 막음' | '겹침' | null`. 감싸는 사각형이 아니라 부품 단위의 기운 상자(OBB 분리축)로 본다(책상 밑 의자는 통과). 높이 30mm 이하(러그)는 겹침에서 빠진다. 안쪽으로 열리는 문은 열림 부채꼴(`doorZone`)과 부품의 바닥 그림자를 견준다.

@@ -12,8 +12,9 @@ const str = (v, d) => String(v ?? d).slice(0, 60) || d;
 const c = { ply: '#d8b98b', oak: '#b88a5b', walnut: '#6b4a34', white: '#f0eee8', gray: '#9aa1a8', black: '#2d3035', fabric: '#7f909e', linen: '#ece8de', metal: '#c8cdd2', rug: '#c5b59f' };
 export const COLORS = [['자작합판', c.ply], ['오크', c.oak], ['월넛', c.walnut], ['화이트', c.white], ['그레이', c.gray], ['블랙', c.black], ['패브릭', c.fabric], ['린넨', c.linen], ['금속', c.metal], ['러그', c.rug]];
 
-/* ---------- 가구 생성기: 치수 → 직육면체 부품 목록. hw = 재단 목록에서 빼는 부품(손잡이·쿠션) ---------- */
-const P = (name, w, d, h, x, y, z, color, hw) => ({ name, w: Math.max(1, Math.round(w)), d: Math.max(1, Math.round(d)), h: Math.max(1, Math.round(h)), x: Math.round(x), y: Math.round(y), z: Math.round(z), color, hw });
+/* ---------- 가구 생성기: 치수 → 직육면체 부품 목록. hw = 재단 목록에서 빼는 부품(손잡이·쿠션), role = 문(경첩 쪽 L·R)·서랍 앞판 ---------- */
+const ROLES = ['doorL', 'doorR', 'drawer'];
+const P = (name, w, d, h, x, y, z, color, hw, role) => ({ name, w: Math.max(1, Math.round(w)), d: Math.max(1, Math.round(d)), h: Math.max(1, Math.round(h)), x: Math.round(x), y: Math.round(y), z: Math.round(z), color, hw, role });
 const BACK = 6; // 뒷판·서랍 바닥판 두께
 
 function carcass(p, out) { // 옆판 2 + 상·하판 + 뒷판 + 걸레받이
@@ -31,7 +32,7 @@ function cabinet(p) {
   const hy = Math.min(Math.max(1000 - hh / 2, pl + g + 40), pl + g + dh - hh - 40); // 손잡이는 바닥 1m 근처, 낮은 장은 문 위쪽
   for (let i = 0; i < n; i++) {
     const x = g + i * (dw + g);
-    out.push(P(`문 ${i + 1}`, dw, T, dh, x, pl + g, D, p.C2), P(`손잡이 ${i + 1}`, 12, 22, hh, i % 2 ? x + 28 : x + dw - 40, hy, D + T, c.black, true));
+    out.push(P(`문 ${i + 1}`, dw, T, dh, x, pl + g, D, p.C2, false, i % 2 ? 'doorR' : 'doorL' /* 손잡이 반대쪽이 경첩 */), P(`손잡이 ${i + 1}`, 12, 22, hh, i % 2 ? x + 28 : x + dw - 40, hy, D + T, c.black, true));
   }
   return out;
 }
@@ -40,7 +41,7 @@ function drawers(p) {
   const fh = (H - pl - g * (n + 1)) / n, bw = iw - 26 /* 레일 13mm×2 */, bd = D - BACK - 20, bh = fh - 40, x = T + 13, z = D - bd;
   for (let i = 0; i < n; i++) {
     const y = pl + g + i * (fh + g), k = n - i, by = Math.max(y + 20, pl + T + 2), hw = Math.min(160, W * .3);
-    out.push(P(`서랍 앞판 ${k}`, W - 2 * g, T, fh, g, y, D, C2), P(`손잡이 ${k}`, hw, 22, 12, (W - hw) / 2, y + fh * .6, D + T, c.black, true));
+    out.push(P(`서랍 앞판 ${k}`, W - 2 * g, T, fh, g, y, D, C2, false, 'drawer'), P(`손잡이 ${k}`, hw, 22, 12, (W - hw) / 2, y + fh * .6, D + T, c.black, true));
     if (bw > 60 && bd > 60 && bh > 30) out.push(
       P(`서랍 옆판 ${k}`, bt, bd, bh, x, by, z, C), P(`서랍 옆판 ${k}`, bt, bd, bh, x + bw - bt, by, z, C),
       P(`서랍 앞뒤판 ${k}`, bw - 2 * bt, bt, bh, x + bt, by, z, C), P(`서랍 앞뒤판 ${k}`, bw - 2 * bt, bt, bh, x + bt, by, D - bt, C),
@@ -94,7 +95,7 @@ export function partsOf(def) {
 }
 export const part = p => ({ id: str(p.id, uid()), name: str(p.name, '부품'), w: num(p.w, 100, 1, 20000), d: num(p.d, 100, 1, 20000), h: num(p.h, 100, 1, 20000),
   x: num(p.x, 0, -20000, 20000), y: num(p.y, 0, 0, 20000), z: num(p.z, 0, -20000, 20000), rx: num(p.rx, 0, -180, 180), ry: num(p.ry, 0, -180, 180), rz: num(p.rz, 0, -180, 180),
-  color: hex(p.color) || c.ply, ...(p.hw && { hw: true }) });
+  color: hex(p.color) || c.ply, ...(p.hw && { hw: true }), ...(ROLES.includes(p.role) && { role: p.role }) });
 
 // 부품 회전: rx·ry·rz(도)를 부품 중심 기준으로 적용. x,y,z는 돌리기 전 상자의 최소 모서리 그대로다
 export function rotOf(p) { // 오일러 XYZ 회전 행렬(행 우선). three.js 기본 순서와 같아 mesh.rotation에 그대로 넣으면 일치한다
@@ -173,8 +174,10 @@ function hull(pts) { // 볼록 껍질(단조 사슬)
   const half = list => { const h = []; for (const p of list) { while (h.length > 1 && turn(h.at(-2), h.at(-1), p) <= 0) h.pop(); h.push(p); } h.pop(); return h; };
   return [...half(pts), ...half(pts.reverse())];
 }
+// 기운 상자의 여덟 꼭짓점을 축 두 개(ax)의 평면에 내린 볼록 껍질
+const flat = (p, ax) => hull([0, 1, 2, 3, 4, 5, 6, 7].map(i => ax.map(k => p.c[k] + [0, 1, 2].reduce((s, j) => s + (i >> j & 1 ? 1 : -1) * p.h[j] * p.u[j][k], 0))));
 // 부품이 바닥에 드리우는 그림자(문 열림 영역과 견줄 때만 쓰므로 필요할 때 계산)
-const foot = p => (p.poly ||= hull([0, 1, 2, 3, 4, 5, 6, 7].map(i => [0, 2].map(k => p.c[k] + [0, 1, 2].reduce((s, j) => s + (i >> j & 1 ? 1 : -1) * p.h[j] * p.u[j][k], 0)))));
+const foot = p => (p.poly ||= flat(p, [0, 2]));
 function obbHit(a, b, tol = 1) { // 기운 상자끼리 분리축 판정: 면 법선 3+3, 모서리 쌍 9. 모든 축에서 tol(mm)보다 깊이 파고들어야 겹침
   const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2], T = [b.c[0] - a.c[0], b.c[1] - a.c[1], b.c[2] - a.c[2]], axes = [...a.u, ...b.u];
   for (const p of a.u) for (const q of b.u) axes.push([p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]]);
@@ -221,8 +224,51 @@ export function cutList(parts) { // 세 치수를 큰 순으로 길이·폭·두
   const rows = [...m.values()].map(r => ({ ...r, name: [...r.names].join(', ') })).sort((a, b) => b.T - a.T || b.L - a.L || b.W - a.W);
   return { rows, area: rows.reduce((s, r) => s + (r.T <= 40 ? r.L * r.W * r.n / 1e6 : 0), 0) };
 }
-const colorName = v => COLORS.find(x => x[1] === v)?.[0] || v;
-export const cutCSV = rows => ['부품,길이(mm),폭(mm),두께(mm),수량,재료', ...rows.map(r => [`"${r.name.replace(/"/g, '""')}"`, r.L, r.W, r.T, r.n, colorName(r.color)].join(','))].join('\r\n');
+export const colorName = v => COLORS.find(x => x[1] === v)?.[0] || v;
+export function buyList(parts) { // 사서 쓰는 것 → [{ name, spec, n }]: hw 부품, 경첩, 서랍 레일
+  const m = new Map(), add = (name, spec, n = 1) => { const k = name + '|' + spec, r = m.get(k) || { name, spec, n: 0 }; r.n += n; m.set(k, r); };
+  for (const p of parts) if (p.hw) add(p.name.replace(/\s*\d+$/, ''), [p.w, p.d, p.h].sort((a, b) => b - a).join('×')); // 큰 치수부터: 세운 손잡이와 눕힌 손잡이가 한 줄
+  for (const p of parts) if (p.role === 'doorL' || p.role === 'doorR') add('경첩', '', p.h <= 900 ? 2 : p.h <= 1600 ? 3 : p.h <= 2000 ? 4 : 5); // 문 높이 기준 어림
+  for (const p of parts) { // 레일 길이: 250~600(50 간격) 중 몸통 깊이(p.z) − 26(뒷판 6 + 여유 20, drawers의 bd) 이하 최댓값
+    const len = Math.min(600, Math.floor((p.z - BACK - 20) / 50) * 50);
+    if (p.role === 'drawer' && len >= 250) add('서랍 레일(쌍)', len + 'mm');
+  }
+  return [...m.values()];
+}
+const q = s => `"${String(s).replace(/"/g, '""')}"`;
+export const cutCSV = (rows, buy = []) => ['부품,길이(mm),폭(mm),두께(mm),수량,재료', ...rows.map(r => [q(r.name), r.L, r.W, r.T, r.n, colorName(r.color)].join(',')),
+  ...(buy.length ? ['', '구매품,규격,수량', ...buy.map(b => [q(b.name), q(b.spec), b.n].join(','))] : [])].join('\r\n');
+
+/* ---------- 판재 배치 ---------- */
+export function cutOpts(raw) { // 원판 길이·폭과 톱날 두께(공구 설정이라 방이 아니라 저장본 최상위에 둔다)
+  const L = num(raw?.L, 2440, 300, 5000), W = num(raw?.W, 1220, 300, 3000);
+  return { L: Math.max(L, W), W: Math.min(L, W), kerf: num(raw?.kerf, 3, 0, 10) };
+}
+// cutList 줄 → 두께·색이 같은 묶음마다 [{ T, color, sheets: [[{ name, l, w, x, y }]], over: [{ name, l, w }] }]. 두께 40mm 이하만(면적 계산과 같은 기준)
+// 조각의 긴 쪽은 늘 원판 길이 방향(결 유지, 돌리지 않음). 띠 단위라 길게 켠 뒤 토막 내는 순서와 같다
+// shortcut: 띠 채우기라 최적이 아니다, 버리는 판재가 아까워지면 길로틴 최적 맞춤으로 바꾼다
+export function nest(rows, o) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (r.T > 40) continue;
+    const key = r.T + r.color, g = groups.get(key) || { T: r.T, color: r.color, sheets: [], over: [], pcs: [] };
+    for (let i = 0; i < r.n; i++) (r.L > o.L || r.W > o.W ? g.over : g.pcs).push({ name: r.name, l: r.L, w: r.W });
+    groups.set(key, g);
+  }
+  return [...groups.values()].map(({ pcs, ...g }) => {
+    const strips = [], next = []; // strips: { s: 원판 번호, y, w, x: 다음 조각 자리 }, next: 원판마다 다음 띠의 y
+    for (const p of pcs.sort((a, b) => b.w - a.w || b.l - a.l)) { // 폭이 넓은 순
+      let t = strips.find(t => p.w <= t.w && t.x + p.l <= o.L);
+      if (!t) {
+        let s = next.findIndex(y => y + p.w <= o.W);
+        if (s < 0) { s = next.push(0) - 1; g.sheets.push([]); }
+        strips.push(t = { s, y: next[s], w: p.w, x: 0 }); next[s] += p.w + o.kerf;
+      }
+      g.sheets[t.s].push({ ...p, x: t.x, y: t.y }); t.x += p.l + o.kerf;
+    }
+    return g;
+  });
+}
 
 /* ---------- DAE (COLLADA 1.4.1, Z_UP, mm) ---------- */
 // 내보낼 묶음: 가구 하나만(def) 또는 방 전체. 묶음마다 상자는 묶음 로컬 좌표(y↑)
@@ -263,6 +309,40 @@ export function toDAE(nodes) {
 <library_visual_scenes><visual_scene id="scene">${scene}</visual_scene></library_visual_scenes>
 <scene><instance_visual_scene url="#scene"/></scene>
 </COLLADA>`;
+}
+
+/* ---------- SVG: 판재 배치도, 치수 도면. viewBox 단위 = mm. 패널에 innerHTML로도 넣으므로 사용자 문자열은 xml()을 거친다 ---------- */
+const r1 = v => +v.toFixed(1);
+const svg = (w, h, fs, body) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${r1(w)} ${r1(h)}" font-family="system-ui, sans-serif" font-size="${r1(fs)}" fill="#111"><rect width="${r1(w)}" height="${r1(h)}" fill="#fff"/>${body}</svg>`;
+export function nestSVG(groups, o) { // 원판을 세로로 쌓고 원판마다 제목, 조각마다 이름과 길이×폭
+  const pad = 40, th = 80;
+  let y = pad, body = '';
+  for (const g of groups) g.sheets.forEach((sheet, i) => {
+    body += `<text x="${pad}" y="${y + 52}" font-weight="600">${g.T}mm ${xml(colorName(g.color))} ${i + 1}/${g.sheets.length}</text><rect x="${pad}" y="${y + th}" width="${o.L}" height="${o.W}" fill="#eceff2" stroke="#222" stroke-width="3"/>`;
+    for (const p of sheet) {
+      const t = `${p.name} ${p.l}×${p.w}`, fs = Math.max(8, Math.min(40, p.w * .5, p.l / t.length / .8));
+      body += `<rect x="${pad + p.x}" y="${y + th + p.y}" width="${p.l}" height="${p.w}" fill="${xml(g.color)}" stroke="#222" stroke-width="2"/><text x="${pad + p.x + p.l / 2}" y="${y + th + p.y + p.w / 2}" font-size="${r1(fs)}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="#fff" stroke-width="${r1(fs / 5)}" stroke-linejoin="round">${xml(t)}</text>`;
+    }
+    y += th + o.W + pad;
+  });
+  return svg(o.L + 2 * pad, y, 48, body);
+}
+// 3각법: 평면도 위, 정면도 아래, 우측면도 오른쪽. 부품을 제 색으로 뒤에서부터 덮어 그려 가려진 선을 처리한다
+// shortcut: 덮어 그리기라 서로 엇갈린 부품은 순서가 틀릴 수 있다, 부품별 치수는 재단 목록으로 대신한다
+export function drawingSVG(def) {
+  const parts = partsOf(def), b = bounds(parts), S = parts.map(p => ({ ...solid({ x: 0, z: 0, rot: 0 }, p, b), color: p.color })); // 가구 중심 좌표의 기운 상자
+  const { W, D } = b, yb = Math.min(0, b.y0), H = b.y1 - yb, u = Math.max(W + D, D + H) / 60, m = 8 * u, top = 2 * m, fy = top + D + m, sx = m + W + m;
+  const views = [ // [내리는 축 둘, 보는 방향 축(가까운 것이 나중), 화면 좌표]
+    [[0, 2], 1, ([x, z]) => [m + x + W / 2, top + z + D / 2]],   // 평면도
+    [[0, 1], 2, ([x, y]) => [m + x + W / 2, fy + b.y1 - y]],     // 정면도
+    [[2, 1], 0, ([z, y]) => [sx + D / 2 - z, fy + b.y1 - y]],    // 우측면도: 앞(+z)이 정면도 쪽(왼쪽)
+  ];
+  const polys = views.map(([ax, k, to]) => [...S].sort((p, q) => p.c[k] + p.e[k] - q.c[k] - q.e[k])
+    .map(p => `<polygon points="${flat(p, ax).map(v => to(v).map(r1).join()).join(' ')}" fill="${xml(p.color)}"/>`).join('')).join('');
+  const dims = [[m, fy + H + 3 * u, m + W, fy + H + 3 * u, W], [m - 3 * u, fy, m - 3 * u, fy + b.y1, b.H], [m - 3 * u, top, m - 3 * u, top + D, D]]; // 전체 가로·높이(바닥에서)·깊이
+  const lines = dims.map(([x1, y1, x2, y2]) => { const [tx, ty] = x1 === x2 ? [u, 0] : [0, u]; return `M${r1(x1 - tx)} ${r1(y1 - ty)}L${r1(x1 + tx)} ${r1(y1 + ty)}M${r1(x1)} ${r1(y1)}L${r1(x2)} ${r1(y2)}M${r1(x2 - tx)} ${r1(y2 - ty)}L${r1(x2 + tx)} ${r1(y2 + ty)}`; }).join('');
+  const texts = dims.map(([x1, y1, x2, y2, v]) => { const x = r1((x1 + x2) / 2), y = r1((y1 + y2) / 2); return x1 === x2 ? `<text x="${x}" y="${y}" dy="${r1(-u)}" text-anchor="middle" transform="rotate(-90 ${x} ${y})">${Math.round(v)}</text>` : `<text x="${x}" y="${y}" dy="${r1(2.8 * u)}" text-anchor="middle">${Math.round(v)}</text>`; }).join('');
+  return svg(sx + D + m, fy + H + m, 2.2 * u, `<text x="${r1(m)}" y="${r1(m)}" font-size="${r1(3 * u)}" font-weight="600">${xml(def.name)} · 단위 mm</text><g stroke="#222" stroke-width="${r1(u / 6)}" stroke-linejoin="round">${polys}</g><path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 6)}"/>${texts}`);
 }
 
 /* ---------- 프로젝트(방 하나). library는 계산용으로 달려 있을 뿐, 모든 방이 같은 목록을 본다(adopt) ---------- */

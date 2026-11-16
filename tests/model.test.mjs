@@ -166,3 +166,49 @@ test('DAE: 태그 짝이 맞고, 묶음·상자 수와 좌표 변환이 맞다',
   const one = M.toDAE([{ name: 'a', x: 0, z: 0, rot: 0, boxes: [{ name: 'b', x: 0, y: 0, z: 0, w: 10, d: 20, h: 30, color: '#ffffff' }] }]);
   assert.match(one, /count="24">0 -20 0 10 -20 0 0 0 0 10 0 0 0 -20 30 10 -20 30 0 0 30 10 0 30</);
 });
+
+test('구매 목록: 손잡이·매트리스, 경첩(문 높이 기준), 서랍 레일', () => {
+  const buy = params => M.buyList(M.partsOf({ kind: params.kind, params })), get = (list, n) => list.find(r => r.name === n);
+  const dr = buy({ kind: 'drawers' });
+  assert.deepEqual([get(dr, '서랍 레일(쌍)').n, get(dr, '서랍 레일(쌍)').spec, get(dr, '손잡이').n], [4, '400mm', 4]);
+  assert.equal(get(buy({ kind: 'cabinet', W: 1200, D: 600, H: 2200, doors: 2 }), '경첩').n, 10);
+  assert.equal(get(buy({ kind: 'cabinet' }), '경첩'), undefined, '문이 없으면 경첩 줄도 없다');
+  assert.equal(get(buy({ kind: 'bed' }), '매트리스').n, 1);
+  assert.deepEqual([M.part({ role: 'x' }).role, M.part({ role: 'doorL' }).role], [undefined, 'doorL']);
+  const doors = M.partsOf({ kind: 'cabinet', params: { doors: 3 } }).filter(p => p.role);
+  assert.deepEqual(doors.map(p => p.role), ['doorL', 'doorR', 'doorL']);
+  assert.match(M.cutCSV([], dr), /\r\n\r\n구매품,규격,수량\r\n"손잡이"/);
+});
+
+test('판재 배치: 띠 채우기, 톱날 간격, 원판보다 큰 조각, 묶음', () => {
+  const o = M.cutOpts({ L: 1220, W: 2440, kerf: 3 }), row = (L, W, n, T = 18, color = '#d8b98b', name = '판') => ({ name, L, W, T, n, color });
+  assert.deepEqual(o, { L: 2440, W: 1220, kerf: 3 }, '폭이 길이보다 크면 맞바꾼다');
+  assert.deepEqual(M.cutOpts({ L: 'x', kerf: 99 }), { L: 2440, W: 1220, kerf: 10 });
+  assert.equal(M.nest([row(1200, 600, 4)], o)[0].sheets.length, 1);
+  assert.equal(M.nest([row(1200, 600, 5)], o)[0].sheets.length, 2);
+  // 실제 가구: 모든 조각이 한 번씩, 원판 안에, 서로 톱날 두께 이상 떨어져 놓인다
+  const { rows } = M.cutList(M.partsOf({ kind: 'drawers', params: {} })), groups = M.nest(rows, o);
+  assert.equal(groups.reduce((s, g) => s + g.over.length + g.sheets.flat().length, 0), rows.reduce((s, r) => s + r.n, 0));
+  for (const g of groups) for (const sheet of g.sheets) sheet.forEach((a, i) => {
+    assert.ok(a.x >= 0 && a.y >= 0 && a.x + a.l <= o.L && a.y + a.w <= o.W, '원판 안');
+    for (const b of sheet.slice(i + 1)) assert.ok(a.x + a.l + o.kerf <= b.x || b.x + b.l + o.kerf <= a.x || a.y + a.w + o.kerf <= b.y || b.y + b.w + o.kerf <= a.y, '톱날 간격');
+  });
+  const mixed = M.nest([row(3000, 500, 2), row(500, 300, 1), row(500, 300, 1, 15), row(500, 300, 1, 18, '#ffffff'), row(900, 90, 4, 90)], o);
+  assert.deepEqual(mixed.map(g => [g.T, g.color, g.sheets.length, g.over.length]), [[18, '#d8b98b', 1, 2], [15, '#d8b98b', 1, 0], [18, '#ffffff', 1, 0]], '두께·색이 다르면 묶음이 갈리고 각재(90mm)는 빠진다');
+  const svg = M.nestSVG(M.nest([row(500, 300, 1, 18, '#d8b98b', '<b>')], o), o);
+  assert.ok(!svg.includes('<b>') && svg.includes('500×300') && svg.includes('18mm 자작합판 1/1'));
+});
+
+test('치수 도면: 부품마다 세 그림, 전체 치수, 이름 escape, 돌린 부품', () => {
+  const nums = s => [...s.matchAll(/>(\d+)<\/text>/g)].map(m => +m[1]).sort((a, b) => a - b);
+  const d = { name: '<b>장', kind: 'cabinet', params: { doors: 2 } }, b = M.bounds(M.partsOf(d)), svg = M.drawingSVG(d);
+  assert.equal(svg.match(/<polygon /g).length, M.partsOf(d).length * 3);
+  assert.deepEqual(nums(svg), [b.W, b.H, b.D].sort((x, y) => x - y));
+  assert.ok(!svg.includes('<b>') && svg.includes('단위 mm'));
+  const tilt = M.drawingSVG({ name: '기운 판', kind: 'custom', parts: [M.part({ w: 400, d: 20, h: 800, rx: -30, ry: 45, rz: 10 }), M.part({ w: 100, d: 100, h: 100, x: 500 })] });
+  assert.equal(tilt.match(/<polygon /g).length, 6);
+  assert.ok(!/NaN|Infinity|undefined/.test(tilt));
+  // 정면도(둘째 묶음)에서 앞에 있는 문이 뒷판보다 나중에 그려진다
+  const one = M.drawingSVG({ name: 'a', kind: 'custom', parts: [M.part({ w: 100, d: 10, h: 100, z: 90, color: '#111111' }), M.part({ w: 100, d: 10, h: 100, z: 0, color: '#eeeeee' })] });
+  assert.deepEqual([...one.matchAll(/fill="(#[0-9a-f]{6})"\/>/g)].slice(2, 4).map(m => m[1]), ['#eeeeee', '#111111']);
+});

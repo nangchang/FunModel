@@ -1,0 +1,9 @@
+{
+  "name": "FunModel — 가구 설계·방 배치",
+  "short_name": "FunModel",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#e9edf1",
+  "theme_color": "#e9edf1",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

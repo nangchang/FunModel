@@ -382,6 +382,25 @@ export function adopt(library, p) {
   p.library = library;
   return p;
 }
+/* ---------- 저장본 = 전체 백업 파일: { v, cur, library, projects(방마다 library 없음), cut } ---------- */
+export const VER = 2; // 저장본 형식 버전. 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
+export const dumpStore = s => JSON.stringify({ v: VER, ...s, projects: s.projects.map(({ library, ...p }) => p) });
+export function readStore(s) { // 저장본·전체 백업(v1: v 없음, 방마다 library) → { cur, library, projects, cut }. 더 새 버전이면 { newer: true }, 못 읽으면 null
+  if (s?.v > VER) return { newer: true };
+  if (!Array.isArray(s?.projects)) return null;
+  const library = [], projects = s.projects.map(p => sanitize({ library: s.library, ...p })).filter(Boolean).map(p => adopt(library, p));
+  return projects.length ? { cur: s.cur, library, projects, cut: cutOpts(s.cut) } : null;
+}
+export function mergeStore(store, inc) { // 읽은 전체 백업(readStore)을 지우지 않고 더한다 → 더한 방 수. 가구는 adopt로 합친 뒤 견줘야 같은 방이 같게 보인다
+  const key = p => JSON.stringify({ ...p, id: 0, library: 0 }), n = store.projects.length;
+  for (const p of inc.projects) {
+    adopt(store.library, p);
+    if (store.projects.some(q => key(q) === key(p))) continue; // 같은 백업을 두 번 불러와도 방이 늘지 않게
+    if (store.projects.some(q => q.id === p.id)) p.id = uid();
+    store.projects.push(p);
+  }
+  return store.projects.length - n;
+}
 export function newProject(name, example, lib) { // lib: 이미 있는 가구 목록. 없으면 기본 가구로 시작
   const L = {}, mk = (key, name, kind, params = {}) => (L[key] = { id: uid(), name, kind, params });
   const library = lib || [mk('bed', '퀸 침대', 'bed'), mk('wardrobe', '옷장', 'cabinet', { W: 1200, D: 600, H: 2200, shelves: 1, doors: 2 }), mk('desk', '책상', 'table'), mk('chair', '의자', 'chair'),

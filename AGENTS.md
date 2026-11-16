@@ -12,6 +12,7 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 
 - 빌드·번들러·린터·npm 의존성이 없다. 정적 ES 모듈을 `index.html`의 importmap(`three` → `vendor/three.module.min.js`)으로 바로 연다. `file://`로는 모듈이 안 열리므로 서버가 필요하다.
 - `serve.py`가 `Cache-Control: no-cache`를 붙인다. 이게 없으면 브라우저(특히 iOS Safari)가 예전 JS를 쓴다. 미리보기 설정은 `.claude/launch.json`의 `funmodel`(포트 5173).
+- 푸시·PR마다 GitHub Actions(`.github/workflows/test.yml`)가 `npm test`를 돈다.
 - 테스트는 `src/model.js`만 본다. `src/app.js`(화면)는 자동 테스트가 없어서 브라우저로 직접 확인해야 한다. 콘솔에서 `window.app`(`M`, `ui`, `store`, `proj`, `camera`)으로 상태를 볼 수 있다.
 
 ## 구조
@@ -31,7 +32,9 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 - 가구 목록(library)은 방과 따로 하나뿐이고 모든 방이 함께 쓴다. 메모리에서는 `store.library`와 지금 방의 `proj.library`가 같은 배열이다(`setProj`). 저장할 때는 방에서 library를 빼고 최상위에 한 번만 쓴다.
 - 다른 곳에서 온 목록(백업 파일, 가구만 내보낸 파일, v1 저장본)은 `adopt(library, p)`로 합친다. 내용이 같으면 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id를 주며 `p.items[].def`도 따라 바꾼다.
 - `sanitize(raw)`가 유일한 검증 지점이다. 저장본·불러온 JSON뿐 아니라 매 변경 뒤에도 돈다. 새 필드를 추가하면 여기서 형태·범위를 맞춰야 저장·불러오기·되돌리기에서 살아남는다.
-- 저장: localStorage `funmodel-v2`. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다.
+- 저장: localStorage `funmodel-v2`. 형식은 `dumpStore`(쓰기)·`readStore`(읽기, v1도 같은 경로)이고 이것이 곧 전체 백업 파일이다. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다.
+- 버전: 저장본의 `v`가 `VER`보다 크면(더 새 앱이 씀) 예시로 시작하고 `flush`가 저장하지 않는다(`locked`). 불러온 파일이면 거절한다. 저장본을 못 읽으면 예시로 덮어쓰기 전에 원문을 `funmodel-v2-bad`에 옮긴다.
+- 전체 백업 불러오기는 `mergeStore`: 지우지 않고 더한다. 가구는 `adopt`, 방은 내용이 같으면 건너뛰고 id만 겹치면 새 id. 원판 설정은 그대로 두고, 되돌리기 기록은 비운다.
 - 원판 설정 `store.cut = { L, W, kerf }`(판재 배치용, `cutOpts`가 범위를 맞춘다)은 공구 설정이라 저장본 최상위에 있다. 방 백업(.json)에는 들어가지 않고 되돌리기 대상도 아니다.
 
 ### 간섭 판정 (`checker`, `conflicts`)
@@ -41,6 +44,7 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 
 ### 화면 흐름 (app.js)
 - 모든 변경은 `commit(fn)`: 되돌리기용으로 `proj`를 JSON 스냅숏 → `fn`이 `proj`를 직접 고침 → `refresh()` = `sanitize` → 장면 `rebuild()` → `renderPanel()` → 400ms 뒤 저장. 되돌리기 기록은 방 단위이고 방을 바꾸면 비워진다.
+- 오류 안내는 `index.html` 머리의 인라인 일반 스크립트다(app.js가 못 열려도 떠야 해서 모듈보다 먼저, 예전 문법으로). 확장·다른 출처 오류는 거른다. app.js는 `window.fmBar(msg, head, keep)`로 같은 막대를 쓴다.
 - 이벤트 연결은 속성으로 한다. `data-a="이름"` 클릭 → `ACT[이름](dataset)`. 입력 `data-f="범위.키"` 변경 → `apply` → `SET[범위](k, v, raw)`. `ui.` 범위는 화면 상태만 바꾸고 commit하지 않는다.
 - 패널은 매번 HTML 문자열을 `innerHTML`로 새로 그린다. 사용자 문자열은 반드시 `esc()`를 거친다.
 - 모드 `ui.mode`: `room`(배치) / `lib`(가구 관리, 미리보기만) / `design`(설계). 보기 `ui.view`: `3d` / `plan`(정사영, 회전 잠금). 장면은 변경 때마다 통째로 다시 만들고, 그리기는 `invalidate()`로 필요할 때만 한다.

@@ -94,6 +94,31 @@ test('가구만 내보낸 파일: 방 없이 읽어 목록에 없는 가구만 �
   assert.deepEqual([lib.length, lib[11].name], [12, '싱글 침대']);
 });
 
+test('저장본 읽기: 버전 확인, v1, 방이 없으면 실패', () => {
+  const p = example(), v1 = JSON.parse(JSON.stringify({ cur: p.id, projects: [p] })); // v 없음, 방마다 library
+  assert.deepEqual(M.readStore({ v: 3, projects: [] }), { newer: true }, '더 새 버전');
+  const r = M.readStore(v1);
+  assert.deepEqual([r.cur, r.projects.length, r.library.length, r.projects[0].library === r.library], [p.id, 1, 11, true]);
+  assert.equal(M.readStore({ ...JSON.parse(M.dumpStore(r)), v: 2 }).projects.length, 1, 'v 2');
+  for (const bad of [null, 'x', {}, { v: 2, projects: [] }, { v: 2, projects: [null, { name: '방 없음' }] }]) assert.equal(M.readStore(bad), null, JSON.stringify(bad));
+});
+
+test('전체 백업: 직렬화→읽기 왕복, 두 번 합쳐도 그대로, id만 겹치면 새 id', () => {
+  const a = example(), b = M.newProject('빈 방', false, a.library), s = { cur: b.id, library: a.library, projects: [a, b], cut: M.cutOpts() };
+  const read = () => M.readStore(JSON.parse(M.dumpStore(s)));
+  assert.ok(!JSON.parse(M.dumpStore(s)).projects.some(p => 'library' in p), '방마다 library를 쓰지 않는다');
+  const r = read();
+  assert.deepEqual(r, { ...s, projects: s.projects.map(p => ({ ...p, library: r.library })) });
+  assert.equal(M.mergeStore(s, read()), 0, '같은 백업은 더할 방이 없다');
+  assert.deepEqual([s.projects.length, s.library.length], [2, 11]);
+  const other = () => { const o = read(); o.projects[0].name = '다른 침실'; return o; }; // id는 a와 같고 내용이 다르다
+  assert.equal(M.mergeStore(s, other()), 1);
+  const added = s.projects[2];
+  assert.notEqual(added.id, a.id);
+  assert.deepEqual([added.name, added.library === s.library, s.library.length, added.items.every(i => M.defOf(added, i))], ['다른 침실', true, 11, true]);
+  assert.equal(M.mergeStore(s, other()), 0, '새 id로 더한 방도 다시 더하지 않는다');
+});
+
 test('부품 회전: 감싸는 상자, 가구 치수, DAE 꼭짓점·면 방향', () => {
   const near = (a, b) => a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-6, `${a} ≠ ${b}`));
   const board = { name: '판', w: 100, d: 20, h: 10, x: 0, y: 0, z: 0, color: '#ffffff' };

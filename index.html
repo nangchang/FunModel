@@ -4,7 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FunModel — 가구 설계·방 배치</title>
+<meta name="description" content="이사나 가구 구매 전에 방 치수대로 가구를 놓아 보는 도구입니다. 설치·가입이 없고 데이터는 이 브라우저에만 저장됩니다.">
+<script>
+// 오류 안내: app.js가 못 열리거나 도중에 죽어도 뜨도록 모듈보다 먼저, 예전 브라우저도 읽는 문법으로 쓴다(app.js에 기대지 않는다)
+(function () {
+  var here = location.protocol + '//' + location.host + '/', bar;
+  function backup() { // 저장본 원문 = 전체 백업 형식
+    var s = null;
+    try { s = localStorage.getItem('funmodel-v2') || localStorage.getItem('funmodel-v1'); } catch (e) { /* 저장소를 못 읽는 브라우저 */ }
+    if (!s) return alert('이 브라우저에 저장된 데이터가 없습니다.');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([s], { type: 'application/json' })); a.download = 'FunModel_전체_백업_' + new Date().toLocaleDateString('sv') + '.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  function show(msg, head, keep) { // keep: 닫기 버튼 없이(app.js의 저장본 버전 안내)
+    if (!document.body) return document.addEventListener('DOMContentLoaded', function () { show(msg, head, keep); });
+    if (!bar) {
+      bar = document.createElement('div'); bar.id = 'oops'; bar.setAttribute('role', 'alert');
+      bar.innerHTML = '<b></b><span></span><div><button data-k="b">백업 저장</button><button data-k="r">새로 고침</button><button data-k="x">닫기</button></div>';
+      bar.onclick = function (e) { var k = e.target.getAttribute('data-k'); if (k === 'b') backup(); else if (k === 'r') location.reload(); else if (k === 'x') bar.hidden = true; };
+      document.body.appendChild(bar);
+    }
+    bar.hidden = false;
+    bar.childNodes[0].textContent = head || '문제가 생겼습니다. 새로 고쳐도 계속되면 백업을 저장해 두세요.';
+    bar.childNodes[1].textContent = String(msg || '').slice(0, 200);
+    bar.querySelector('[data-k=x]').hidden = !!keep;
+  }
+  window.fmBar = show;
+  addEventListener('error', function (e) { // 캡처 단계: 버블링하지 않는 script·link 로드 실패도 여기서 보인다
+    var t = e.target, m = e.message || '';
+    if (t && t !== window) { // 리소스: 우리 출처의 script·stylesheet만(아이콘·manifest·확장이 넣은 요소는 뺀다)
+      var u = t.src || t.href || '';
+      if ((t.tagName === 'SCRIPT' || t.rel === 'stylesheet') && u.indexOf(here) === 0) show('불러오지 못한 파일: ' + u.slice(here.length - 1));
+      return;
+    }
+    if (!e.filename || e.filename.indexOf(here) !== 0 || m.indexOf('ResizeObserver loop') >= 0) return; // 확장·다른 출처("Script error.")·무해한 경고
+    show(m);
+  }, true);
+  addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    if (r && r.stack && r.stack.indexOf(here) < 0) return; // 우리 코드에서 난 것이 아님
+    show(r && r.message || r);
+  });
+})();
+</script>
 <link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/" } }</script>
 </head>
 <body>

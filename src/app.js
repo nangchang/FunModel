@@ -11,16 +11,18 @@ const size = b => `${fmt(b.W)} × ${fmt(b.D)} × ${fmt(b.H)}`;
 
 /* ---------- 상태 ---------- */
 const KEY = 'funmodel-v2'; // v2: 가구 목록(library)이 방 밖에 하나. v1(방마다 목록)은 읽어서 합치고 원본은 그대로 둔다
+let locked = false; // 더 새 앱이 쓴 저장본: 예시로 시작하되 덮어쓰지 않게 저장을 막는다
 function load() {
   try {
-    const s = JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem('funmodel-v1')), library = [];
-    const projects = s.projects.map(p => M.sanitize({ library: s.library, ...p })).filter(Boolean).map(p => M.adopt(library, p));
-    if (projects.length) return { cur: s.cur, library, projects, cut: M.cutOpts(s.cut) };
+    const r = M.readStore(JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem('funmodel-v1')));
+    if (r?.newer) locked = true; else if (r) return r;
   } catch { /* 저장본이 없거나 깨졌으면 예시로 시작 */ }
+  if (!locked) try { const raw = localStorage.getItem(KEY); if (raw) localStorage.setItem(KEY + '-bad', raw); } catch { /* 못 옮겨도 시작은 한다 */ } // 예시로 덮어쓰기 전에 원문을 남긴다
   const p = M.newProject('침실 예시', true);
   return { library: p.library, projects: [p], cut: M.cutOpts() };
 }
 const store = load();
+if (locked) window.fmBar?.('지금은 저장되지 않습니다', '이 저장본은 더 새 버전에서 만들었습니다. 새로 고침하세요(예전 화면이 캐시에 남았을 수 있습니다).', true); // index.html의 오류 안내 막대
 let proj = store.projects.find(p => p.id === store.cur) || store.projects[0];
 const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null };
 const hist = { undo: [], redo: [] };
@@ -45,7 +47,8 @@ let saveT = 0, toastT = 0;
 function save() { clearTimeout(saveT); saveT = setTimeout(flush, 400); }
 function flush() {
   clearTimeout(saveT);
-  try { localStorage.setItem(KEY, JSON.stringify({ v: 2, ...store, projects: store.projects.map(p => ({ ...p, library: undefined })) })); } catch { toast('저장하지 못했습니다. 브라우저 저장 공간을 확인하세요'); }
+  if (locked) return;
+  try { localStorage.setItem(KEY, M.dumpStore(store)); } catch { toast('저장하지 못했습니다. 브라우저 저장 공간을 확인하세요'); }
 }
 addEventListener('pagehide', flush);
 function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2600); }
@@ -463,7 +466,9 @@ const ACT = {
     menu.innerHTML = `<div><h3>방</h3><div class="list">${store.projects.map(p => `<button data-a="proj" data-id="${esc(p.id)}"${p === proj ? ' class="on"' : ''}><span>${esc(p.name)}</span><small>${fmt(p.room.w)} × ${fmt(p.room.d)}</small></button>`).join('')}</div>
       <div class="row">${btn('＋ 새 방', 'newProj')}${btn('이 방 복제', 'dupProj')}${btn('이 방 삭제', 'delProj', '', 'danger')}</div>
       <h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg') : btn('평면도 (.png)', 'png')}</div>
-      <h3>백업 — 이 방과 가구 목록</h3><div class="row">${btn('파일로 저장 (.json)', 'json')}${btn('파일에서 불러오기', 'import')}</div></div>`;
+      <h3>백업</h3><div class="row">${btn('이 방만 저장 (.json)', 'json')}${btn('전체 백업 (.json)', 'backup')}${btn('파일에서 불러오기', 'import')}</div>
+      <p class="hint">이 방만 저장하면 그 방과 가구 목록이, 전체 백업에는 모든 방이 들어갑니다. 전체 백업을 불러오면 지우지 않고 없는 방만 더합니다.</p>
+      <a class="hint" href="https://github.com/nangchang/FunModel/issues" target="_blank" rel="noopener">의견·오류 알리기</a></div>`;
     menu.showModal();
   },
   proj: d => openProject(store.projects.find(p => p.id === d.id)),
@@ -481,6 +486,7 @@ const ACT = {
   svg: () => { const d = curDef(); download(d.name + ' 도면.svg', M.drawingSVG(d), 'image/svg+xml'); },
   png: planPNG,
   json: () => download(proj.name + '.json', JSON.stringify(proj, null, 1), 'application/json'),
+  backup: () => download(`FunModel 전체 백업 ${new Date().toLocaleDateString('sv')}.json`, locked ? localStorage.getItem(KEY) : M.dumpStore(store), 'application/json'), // sv = 지역 날짜 YYYY-MM-DD. 저장본과 같은 내용(잠겼으면 화면의 예시가 아니라 저장본 원문)
   lib: () => download('가구 목록.json', JSON.stringify({ library: proj.library }, null, 1), 'application/json'), // 방 없이 가구만
   import: () => $('#file').click(),
 };
@@ -496,8 +502,20 @@ $('#file').addEventListener('change', async e => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
-  let p = null, lib = false;
-  try { if (f.size < 2e6) { const raw = JSON.parse(await f.text()); lib = !raw.room && Array.isArray(raw.library); p = M.sanitize(lib ? { room: {}, library: raw.library } : raw); } } catch { /* 아래에서 알림 */ }
+  let p = null, lib = false, all = null;
+  try {
+    if (f.size < 2e7) {
+      const raw = JSON.parse(await f.text());
+      if (raw.v > M.VER) return toast('더 새 버전에서 만든 파일입니다');
+      if (Array.isArray(raw.projects)) all = M.readStore(raw); // 전체 백업
+      else { lib = !raw.room && Array.isArray(raw.library); p = M.sanitize(lib ? { room: {}, library: raw.library } : raw); }
+    }
+  } catch { /* 아래에서 알림 */ }
+  if (all) { // 지우지 않고 더한다. 되돌리기 기록은 비운다(지난 기록으로 돌아가면 새로 합친 가구가 공용 목록에서 빠진다)
+    const n = M.mergeStore(store, all);
+    openProject(proj);
+    return toast(n ? `방 ${n}개를 불러왔습니다` : '새로 더할 방이 없습니다');
+  }
   if (!p) return toast('읽을 수 없는 파일입니다');
   if (lib) { // 가구만 든 파일: 방은 만들지 않고 공용 목록에 없는 가구만 더한다(되돌리기 가능)
     const n = proj.library.length;

@@ -26,6 +26,11 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; paddin
 .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--chip); }
 .seg button { border: 0; border-radius: 7px; padding: 6px 12px; background: none; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .15); }
+@media (max-width: 440px) { /* 모드 버튼 셋(배치·가구·설계)이 360px 폭 휴대폰에도 들어가게 */
+  header { gap: 5px; padding-inline: 8px; }
+  header .ib { min-width: 34px; }
+  header .seg button { padding: 6px 8px; }
+}
 
 #stage { position: relative; overflow: hidden; background: var(--scene); min-height: 0; }
 #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }

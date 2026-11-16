@@ -14,4 +14,4 @@ npm test     # 모델 단위 테스트 (node --test)
 | `serve.py` | 개발용 서버. 브라우저가 예전 JS를 캐시에서 쓰지 않게 `Cache-Control: no-cache`를 붙인다 |
 | `vendor/` | three.js 0.160.0 (모듈 + OrbitControls, TransformControls) |
 
-가구 목록은 방과 따로 하나만 두고 모든 방이 함께 쓴다. 데이터는 브라우저 localStorage(`funmodel-v2`)에만 저장된다(예전 `funmodel-v1`은 처음 열 때 읽어서 합친다). 다른 기기로 옮기려면 메뉴의 백업(.json)을 쓴다.
+가구 목록은 방과 따로 하나만 두고 모든 방이 함께 쓴다. 데이터는 브라우저 localStorage(`funmodel-v2`)에만 저장된다(예전 `funmodel-v1`은 처음 열 때 읽어서 합친다). 다른 기기로 옮기려면 메뉴의 백업(.json)을 쓴다. 방 없이 가구만 옮기려면 `가구` 화면의 "가구만 내보내기"를 쓴다(불러오면 목록에 없는 가구만 더해진다).

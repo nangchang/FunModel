@@ -84,6 +84,16 @@ test('adopt: 방에 딸려 온 가구 목록을 공용 목록에 합친다', () 
   assert.equal(M.newProject('빈 방', false, lib).library.length, 12);
 });
 
+test('가구만 내보낸 파일: 방 없이 읽어 목록에 없는 가구만 더한다', () => {
+  const lib = M.adopt([], example()).library, read = l => M.sanitize({ room: {}, library: JSON.parse(JSON.stringify({ library: l })).library }); // 앱의 내보내기·불러오기와 같은 경로
+  M.adopt(lib, read(lib));
+  assert.equal(lib.length, 11, '같은 파일을 다시 불러오면 늘지 않는다');
+  const other = M.adopt([], example()).library;
+  other[0].name = '싱글 침대';
+  M.adopt(lib, read(other));
+  assert.deepEqual([lib.length, lib[11].name], [12, '싱글 침대']);
+});
+
 test('부품 회전: 감싸는 상자, 가구 치수, DAE 꼭짓점·면 방향', () => {
   const near = (a, b) => a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-6, `${a} ≠ ${b}`));
   const board = { name: '판', w: 100, d: 20, h: 10, x: 0, y: 0, z: 0, color: '#ffffff' };

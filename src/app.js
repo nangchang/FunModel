@@ -247,7 +247,7 @@ function up(e) {
   if (gz) { gz = 0; return; } // 방금 화살표(gizmo)를 눌렀다
   if (!tap) return;
   const h = hitTest(e);
-  if (ui.mode === 'room') ui.sel = h ? { type: 'item', id: h.data.item } : null; else ui.partId = h?.data.part ?? null;
+  if (ui.mode === 'room') ui.sel = h ? { type: 'item', id: h.data.item } : null; else if (ui.mode === 'design') ui.partId = h?.data.part ?? null; // 가구 관리 화면은 미리보기만
   rebuild(); renderPanel();
 }
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
@@ -308,11 +308,21 @@ function roomPanel() {
       <p class="hint">안쪽으로 열리는 문은 열림 궤적 안에 가구가 있으면 경고합니다.</p>`,
   }[ui.tab]();
 }
+const usedN = id => store.projects.reduce((n, r) => n + r.items.filter(i => i.def === id).length, 0); // 모든 방에 놓인 개수
+function libPanel() { // 가구 관리: 방과 상관없이 공용 가구 목록만 다룬다. 고른 가구는 화면에 미리보기로 뜬다
+  const d = curDef(), n = d && usedN(d.id);
+  return `<div class="head"><h2>가구 관리</h2><small>${proj.library.length}개 · 모든 방이 함께 씁니다</small></div>
+    ${d ? `<div class="grid">${text('이름', 'def.name', d.name)}</div>
+    <div class="row">${btn('설계 수정', 'mode', 'data-v="design"', 'pri')}${btn('방에 놓기', 'place')}${btn('복제', 'dupDef')}${btn(n ? `삭제 (모든 방에 놓인 ${n}개도)` : '삭제', 'delDef', '', 'danger')}</div>` : ''}
+    <div class="list">${proj.library.map(x => { const u = usedN(x.id); return `<button data-a="set" data-f="ui.defId" data-v="${esc(x.id)}"${x === d ? ' class="on"' : ''}><i class="dot" style="background:${M.partsOf(x)[0]?.color || '#ccc'}"></i><span>${esc(x.name)}</span><small>${size(M.bounds(M.partsOf(x)))}${u ? ` · ${u}개 놓임` : ''}</small></button>`; }).join('')}</div>
+    <div class="row">${btn('＋ 새 가구', 'newDefUI')}${btn('가구만 내보내기 (.json)', 'lib')}${btn('가구 파일 불러오기', 'import')}</div>
+    <p class="hint">가구만 내보낸 파일에는 방이 들어가지 않습니다. 불러오면 목록에 없는 가구만 더해집니다.</p>`;
+}
 function designPanel() {
   const d = curDef();
   if (!d) return `<h2>새 가구</h2><div class="cards">${Object.entries(M.KINDS).map(([k, v]) => `<div class="card"><button data-a="newDef" data-v="${k}"><b>${v.label}</b><small>치수로 만들기</small></button></div>`).join('')}
     <div class="card"><button data-a="newDef" data-v="custom"><b>직접 만들기</b><small>부품을 하나씩</small></button></div></div>${proj.library.length ? `<div class="row">${btn('취소', 'mode', 'data-v="design"')}</div>` : ''}`;
-  const parts = M.partsOf(d), custom = d.kind === 'custom', used = store.projects.reduce((n, r) => n + r.items.filter(i => i.def === d.id).length, 0), p = selPart();
+  const parts = M.partsOf(d), custom = d.kind === 'custom', used = usedN(d.id), p = selPart();
   const partList = `<div class="list">${parts.map(q => `<button data-a="pickPart" data-id="${esc(q.id)}"${q.id === ui.partId ? ' class="on"' : ''}><i class="dot" style="background:${q.color}"></i><span>${esc(q.name)}</span><small>${q.w} × ${q.d} × ${q.h}</small></button>`).join('')}</div>`;
   const edit = custom
     ? `${partList}<div class="row">${btn('＋ 부품', 'addPart')}${p ? btn('복제', 'dupPart') + btn('삭제', 'delPart', '', 'danger') : ''}</div>
@@ -336,7 +346,7 @@ function renderPanel() { // 다음 프레임에 그린다: Tab으로 옮겨 간 
   cancelAnimationFrame(panelRaf);
   panelRaf = requestAnimationFrame(() => {
     const body = $('#pbody'), a = document.activeElement, f = body.contains(a) && a.matches('input,select') && a.dataset.f, top = body.scrollTop;
-    body.innerHTML = ui.mode === 'room' ? roomPanel() : designPanel();
+    body.innerHTML = { room: roomPanel, lib: libPanel, design: designPanel }[ui.mode]();
     body.scrollTop = top;
     if (f) body.querySelector(`:is(input,select)[data-f="${f}"]`)?.focus();
     document.querySelectorAll('header [data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === ui[b.dataset.a]));
@@ -408,7 +418,7 @@ function planPNG() { // 평면도는 장면을 찍지 않고 모델에서 바로
   cv.toBlob(b => download(proj.name + '.png', b));
 }
 
-const menu = $('#menu'), designDef = () => (ui.mode === 'design' ? curDef() : undefined);
+const menu = $('#menu'), designDef = () => (ui.mode !== 'room' ? curDef() : undefined);
 const ACT = {
   mode: d => go(d.v, d.id),
   view: d => { ui.view = d.v; setView(); renderPanel(); },
@@ -462,6 +472,7 @@ const ACT = {
   csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows), 'text/csv'); }, // BOM: 엑셀 한글
   png: planPNG,
   json: () => download(proj.name + '.json', JSON.stringify(proj, null, 1), 'application/json'),
+  lib: () => download('가구 목록.json', JSON.stringify({ library: proj.library }, null, 1), 'application/json'), // 방 없이 가구만
   import: () => $('#file').click(),
 };
 document.addEventListener('click', e => { const el = e.target.closest('[data-a]'); if (el) ACT[el.dataset.a]?.(el.dataset); });
@@ -476,9 +487,14 @@ $('#file').addEventListener('change', async e => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
-  let p = null;
-  try { if (f.size < 2e6) p = M.sanitize(JSON.parse(await f.text())); } catch { /* 아래에서 알림 */ }
+  let p = null, lib = false;
+  try { if (f.size < 2e6) { const raw = JSON.parse(await f.text()); lib = !raw.room && Array.isArray(raw.library); p = M.sanitize(lib ? { room: {}, library: raw.library } : raw); } } catch { /* 아래에서 알림 */ }
   if (!p) return toast('읽을 수 없는 파일입니다');
+  if (lib) { // 가구만 든 파일: 방은 만들지 않고 공용 목록에 없는 가구만 더한다(되돌리기 가능)
+    const n = proj.library.length;
+    commit(() => M.adopt(proj.library, p));
+    return toast(proj.library.length > n ? `가구 ${proj.library.length - n}개를 불러왔습니다` : '새로 더할 가구가 없습니다');
+  }
   M.adopt(store.library, p); p.id = M.uid(); store.projects.push(p); openProject(p); toast(`"${p.name}" 방을 불러왔습니다`);
 });
 addEventListener('keydown', e => {

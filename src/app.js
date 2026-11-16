@@ -27,7 +27,11 @@ function load() {
 }
 const store = load();
 if (locked) window.fmBar?.('지금은 저장되지 않습니다', '이 저장본은 더 새 버전에서 만들었습니다. 새로 고침하세요(예전 화면이 캐시에 남았을 수 있습니다).', true); // index.html의 오류 안내 막대
-let proj = store.projects.find(p => p.id === store.cur) || store.projects[0];
+// 공유 링크(#room=)로 열면 받은 방을 읽기 전용으로 보여 준다(viewing). store에는 넣지 않고 저장도 하지 않는다.
+// 최상위 await: 풀기가 끝난 뒤에 화면을 처음 만드니 내 방이 먼저 그려지거나 그 사이 편집이 끼어들 일이 없다
+const shareHash = location.hash.startsWith('#room='), shared = shareHash ? await M.decodeShare(location.hash.slice(6)) : null;
+let viewing = shared?.room ? shared : null;
+let proj = viewing || store.projects.find(p => p.id === store.cur) || store.projects[0];
 const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체' }; // q: 가구 검색어, cat: 가구 탭의 분류
 const hist = { undo: [], redo: [] };
 let bad = { items: new Map(), doors: new Set() };
@@ -37,10 +41,10 @@ const selItem = () => (ui.sel?.type === 'item' ? proj.items.find(i => i.id === u
 const selOpen = () => (ui.sel?.type === 'open' ? proj.openings.find(o => o.id === ui.sel.id) : null);
 const selPart = () => { const d = curDef(); return d?.kind === 'custom' ? d.parts.find(p => p.id === ui.partId) : null; };
 
-function setProj(p) { store.projects[store.projects.indexOf(proj)] = p; proj = p; store.cur = p.id; store.library = p.library; } // 지금 방의 library가 곧 공용 가구 목록
+function setProj(p) { if (!viewing) { store.projects[store.projects.indexOf(proj)] = p; store.cur = p.id; store.library = p.library; } proj = p; } // 지금 방의 library가 곧 공용 가구 목록(보기 방의 library는 그 방 것)
 function snap() { hist.undo.push(JSON.stringify(proj)); if (hist.undo.length > 60) hist.undo.shift(); hist.redo = []; }
-function commit(fn) { snap(); fn(); refresh(); }
-function travel(from, to) { if (!from.length) return; to.push(JSON.stringify(proj)); setProj(JSON.parse(from.pop())); refresh(); }
+function commit(fn) { if (viewing) return; snap(); fn(); refresh(); }
+function travel(from, to) { if (!from.length || viewing) return; to.push(JSON.stringify(proj)); setProj(JSON.parse(from.pop())); refresh(); }
 function refresh() { // 모든 변경 뒤: 값 범위를 다시 맞추고(sanitize) 장면·패널·저장을 갱신
   setProj(M.sanitize(proj));
   if (ui.sel && !selItem() && !selOpen()) ui.sel = null;
@@ -51,7 +55,7 @@ let saveT = 0, toastT = 0;
 function save() { clearTimeout(saveT); saveT = setTimeout(flush, 400); }
 function flush() {
   clearTimeout(saveT);
-  if (locked || fresh) return;
+  if (locked || fresh || viewing) return;
   try { localStorage.setItem(KEY, M.dumpStore(store)); } catch { toast('저장하지 못했습니다. 브라우저 저장 공간을 확인하세요'); }
 }
 addEventListener('pagehide', flush);
@@ -233,7 +237,7 @@ let down = null, drag = null, gz = 0;
 canvas.addEventListener('pointerdown', e => {
   if (!e.isPrimary) return;
   down = { x: e.clientX, y: e.clientY };
-  if (ui.mode !== 'room') return;
+  if (ui.mode !== 'room' || viewing) return;
   const h = hitTest(e), id = h?.data.item;
   if (!id || !(e.pointerType === 'mouse' ? e.button === 0 : ui.sel?.id === id)) return;
   const it = proj.items.find(i => i.id === id);
@@ -258,7 +262,7 @@ function up(e) {
   down = drag = null;
   if (was) { controls.enabled = true; if (was.moved) return refresh(); }
   if (gz) { gz = 0; return; } // 방금 화살표(gizmo)를 눌렀다
-  if (!tap) return;
+  if (!tap || viewing) return;
   const h = hitTest(e);
   if (ui.mode === 'room') ui.sel = h ? { type: 'item', id: h.data.item } : null; else if (ui.mode === 'design') ui.partId = h?.data.part ?? null; // 가구 관리 화면은 미리보기만
   rebuild(); renderPanel();
@@ -415,37 +419,25 @@ function openProject(p) {
   setProj(M.sanitize({ ...p, library: store.library })); // 공용 가구 목록을 붙인다. 그 사이 지워진 가구는 이 방에서도 빠진다
   go('room', null); save();
 }
+function addProject(p) { M.adopt(store.library, p); p.id = M.uid(); store.projects.push(p); openProject(p); } // 받은 방 하나(파일·공유 링크)를 내 방으로
+function endView() { viewing = null; document.body.classList.remove('viewing'); history.replaceState(null, '', location.pathname + location.search); } // 해시를 지운다(location.hash를 바꾸면 hashchange로 새로 고침된다)
 function download(name, data, type) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type })); a.download = name.replace(/[\\/:*?"<>|\s]+/g, '_'); a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
-function planPNG() { // 평면도는 장면을 찍지 않고 모델에서 바로 2D로 그린다
-  const { room } = proj, k = 1600 / (room.w + 2 * M.WT), pad = 110, cv = document.createElement('canvas'), g = cv.getContext('2d');
-  cv.width = 1600 + 2 * pad; cv.height = Math.round((room.d + 2 * M.WT) * k) + 2 * pad;
-  const X = x => pad + (x + M.WT) * k, Z = z => pad + (z + M.WT) * k;
-  const path = pts => { g.beginPath(); pts.forEach(([x, z], i) => (i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z)))); g.closePath(); };
-  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
-  g.fillStyle = room.floor; g.fillRect(X(0), Z(0), room.w * k, room.d * k);
-  for (const b of M.wallBoxes(room, proj.openings)) {
-    if (b.kind === 'top' || (b.kind === 'wall' && b.h < room.h)) continue; // 개구부 위·아래 조각은 뺀다
-    g.fillStyle = b.kind === 'glass' ? '#7db7d8' : '#3a424b'; g.fillRect(X(b.x), Z(b.z), b.w * k, b.d * k);
-  }
-  g.lineWidth = 2; g.strokeStyle = '#3a424b'; g.setLineDash([8, 6]);
-  for (const o of proj.openings) if (o.type === 'door') { path(M.doorZone(room, o)); g.stroke(); }
-  g.setLineDash([]); g.textAlign = 'center'; g.textBaseline = 'middle';
-  const shapes = proj.items.map(it => [M.defOf(proj, it), M.shape(proj, it), it]).sort((a, b) => a[1].y1 - b[1].y1); // 낮은 것(러그)부터
-  for (const [d, s] of shapes) { path(s.poly); g.fillStyle = M.partsOf(d)[0]?.color || '#ccc'; g.fill(); g.stroke(); }
-  g.lineJoin = 'round';
-  for (const [d, s, it] of shapes) for (const [t, dy, font] of [[d.name, -12, '600 22px system-ui, sans-serif'], [`${fmt(s.b.W)} × ${fmt(s.b.D)}`, 14, '18px system-ui, sans-serif']]) {
-    g.font = font; g.lineWidth = 5; g.strokeStyle = '#fff'; g.fillStyle = '#111';
-    g.strokeText(t, X(it.x), Z(it.z) + dy); g.fillText(t, X(it.x), Z(it.z) + dy);
-  }
-  g.font = '24px system-ui, sans-serif'; g.fillText(fmt(room.w), X(room.w / 2), pad / 2);
-  g.save(); g.translate(pad / 2, Z(room.d / 2)); g.rotate(-Math.PI / 2); g.fillText(fmt(room.d), 0, 0); g.restore();
-  g.textAlign = 'left'; g.fillText(`${proj.name} · 단위 mm`, pad, cv.height - pad / 2);
-  cv.toBlob(b => download(proj.name + '.png', b));
+function planPNG() { // 평면도 SVG(인쇄와 같은 그림)를 가로 1600px 그림으로. width·height가 없는 SVG는 Firefox가 캔버스에 그리지 않는다
+  const s = M.planSVG(proj), W = 1600, [, , w, h] = s.match(/viewBox="([^"]+)"/)[1].split(' ').map(Number), H = Math.round(W * h / w), img = new Image();
+  img.onload = () => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; cv.getContext('2d').drawImage(img, 0, 0, W, H); cv.toBlob(b => download(proj.name + '.png', b)); };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s.replace('<svg ', `<svg width="${W}" height="${H}" `));
 }
+function shot() { // 지금 화면(3D·평면)을 PNG 파일로. 선택 표시를 빼고 그린 직후 같은 작업 안에서 읽는다(preserveDrawingBuffer 꺼짐). #labels(DOM 이름표)는 안 찍힌다
+  const was = ui.sel; ui.sel = null; rebuild(); render();
+  const bin = atob(canvas.toDataURL('image/png').split(',')[1]);
+  ui.sel = was; rebuild();
+  return new File([Uint8Array.from(bin, ch => ch.charCodeAt(0))], 'FunModel.png', { type: 'image/png' });
+}
+let link; // 공유 링크: 내보내기 대화상자를 열 때 미리 만든다(압축이 비동기라. 클립보드는 누른 그 자리에서 써야 Safari가 받는다). undefined = 만드는 중, null = 못 만듦
 
 const menu = $('#menu'), designDef = () => (ui.mode !== 'room' ? curDef() : undefined);
 const ACT = {
@@ -489,7 +481,11 @@ const ACT = {
   },
   exports: () => {
     const d = designDef();
-    menu.innerHTML = `<div><h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg') : btn('평면도 (.png)', 'png')}</div>
+    if (!d) { link = undefined; M.encodeShare(proj).then(s => { link = s && `${location.origin}${location.pathname}#room=${s}`; }); }
+    menu.innerHTML = `<div><h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg')
+      : btn('평면도 (.png)', 'png') + btn('평면도 인쇄·PDF', 'print') + btn('화면 이미지 (.png)', 'shot') + (navigator.canShare?.({ files: [new File([''], 'a.png', { type: 'image/png' })] }) ? btn('화면 이미지 공유', 'shotShare') : '')}</div>
+      ${d ? '' : `<p class="hint">PDF는 인쇄 대화상자에서 'PDF로 저장'을 고르세요.</p>
+      <h3>공유</h3><div class="row">${btn('공유 링크 복사', 'share', '', 'pri')}</div><p class="hint">링크에 방 내용이 그대로 들어 있습니다(서버에 올라가지 않음). 고친 뒤에는 링크를 다시 만드세요.</p>`}
       <h3>백업</h3><div class="row">${btn('이 방만 저장 (.json)', 'json')}${btn('전체 백업 (.json)', 'backup')}${btn('파일에서 불러오기', 'import')}</div>
       <p class="hint">이 방만 저장하면 그 방과 가구 목록이, 전체 백업에는 모든 방이 들어갑니다. 전체 백업을 불러오면 지우지 않고 없는 방만 더합니다.</p>
       <a class="hint" href="https://github.com/nangchang/FunModel/issues" target="_blank" rel="noopener">의견·오류 알리기</a></div>`;
@@ -519,6 +515,19 @@ const ACT = {
   nestSvg: () => { const d = curDef(); download(d.name + ' 판재배치.svg', M.nestSVG(M.nest(M.cutList(M.partsOf(d)).rows, store.cut), store.cut), 'image/svg+xml'); },
   svg: () => { const d = curDef(); download(d.name + ' 도면.svg', M.drawingSVG(d), 'image/svg+xml'); },
   png: planPNG,
+  print: () => { $('#print').innerHTML = M.planSVG(proj); window.print(); }, // 인쇄 화면에는 #print만 보인다(style.css). 끝나면 afterprint에서 비운다
+  shot: () => download(proj.name + ' 화면.png', shot()),
+  shotShare: () => navigator.share({ files: [shot()], title: proj.name }).catch(e => { if (e.name !== 'AbortError') toast('공유하지 못했습니다'); }), // 취소는 조용히
+  share: () => {
+    if (link === undefined) return toast('링크를 만드는 중입니다. 다시 눌러 주세요');
+    if (!link) return toast('이 브라우저에서는 공유 링크를 만들 수 없습니다');
+    const long = link.length > 8000 ? '. 링크가 길어 일부 메신저에서 잘릴 수 있습니다' : '', url = link, ask = () => prompt('링크를 복사하세요', url);
+    if (!navigator.clipboard) return ask();
+    navigator.clipboard.writeText(url).then(() => toast('링크를 복사했습니다. 받은 사람은 설치·가입 없이 봅니다' + long), ask);
+  },
+  // 공유받은 방(읽기 전용) 막대
+  copyShared: () => { const p = viewing; endView(); if (fresh) { store.projects = []; fresh = false; } addProject(p); toast(`"${p.name}" 방을 내 방으로 복사했습니다`); }, // 저장본이 없던 사람은 예시 방 대신 받은 방만
+  closeShared: () => { endView(); openProject(store.projects.find(p => p.id === store.cur) || store.projects[0]); if (fresh) $('#start').showModal(); },
   json: () => download(proj.name + '.json', JSON.stringify(proj, null, 1), 'application/json'),
   backup: () => download(`FunModel 전체 백업 ${new Date().toLocaleDateString('sv')}.json`, locked ? localStorage.getItem(KEY) : M.dumpStore(store), 'application/json'), // sv = 지역 날짜 YYYY-MM-DD. 저장본과 같은 내용(잠겼으면 화면의 예시가 아니라 저장본 원문)
   lib: () => download('가구 목록.json', JSON.stringify({ library: proj.library }, null, 1), 'application/json'), // 방 없이 가구만
@@ -558,10 +567,10 @@ $('#file').addEventListener('change', async e => {
     commit(() => M.adopt(proj.library, p));
     return toast(proj.library.length > n ? `가구 ${proj.library.length - n}개를 불러왔습니다` : '새로 더할 가구가 없습니다');
   }
-  M.adopt(store.library, p); p.id = M.uid(); store.projects.push(p); openProject(p); toast(`"${p.name}" 방을 불러왔습니다`);
+  addProject(p); toast(`"${p.name}" 방을 불러왔습니다`);
 });
 addEventListener('keydown', e => {
-  if (e.target.matches('input,select,textarea') || menu.open) return;
+  if (e.target.matches('input,select,textarea') || menu.open || viewing) return;
   const k = e.key.toLowerCase(), it = selItem();
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); return e.shiftKey ? ACT.redo() : ACT.undo(); }
   if (k === 'escape') return ACT.desel();
@@ -572,6 +581,10 @@ addEventListener('keydown', e => {
   if (move) { e.preventDefault(); commit(() => { it.x += move[0]; it.z += move[1]; }); }
 });
 
+addEventListener('afterprint', () => { $('#print').innerHTML = ''; });
+addEventListener('hashchange', () => location.reload()); // 열린 채로 주소창에 공유 링크를 붙여 넣었을 때
+if (viewing) { document.body.classList.add('viewing'); $('#shared span').textContent = `공유받은 방 "${viewing.name}" · 읽기 전용`; } // 패널을 숨긴 뒤에 화면을 맞춘다(setView → fit)
 setView(); renderPanel();
-if (fresh) $('#start').showModal(); // 예시 방을 뒤에 그려 두고 그 위에 띄운다
+if (shareHash && !viewing) toast(shared?.newer ? '더 새 버전에서 만든 링크입니다. 새로 고침해 보세요' : '읽을 수 없는 공유 링크입니다');
+if (fresh && !viewing) $('#start').showModal(); // 예시 방을 뒤에 그려 두고 그 위에 띄운다
 window.app = { M, ui, store, get proj() { return proj; }, get camera() { return camera; } }; // 콘솔 디버깅용

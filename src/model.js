@@ -356,6 +356,34 @@ export function drawingSVG(def) {
   const texts = dims.map(([x1, y1, x2, y2, v]) => { const x = r1((x1 + x2) / 2), y = r1((y1 + y2) / 2); return x1 === x2 ? `<text x="${x}" y="${y}" dy="${r1(-u)}" text-anchor="middle" transform="rotate(-90 ${x} ${y})">${Math.round(v)}</text>` : `<text x="${x}" y="${y}" dy="${r1(2.8 * u)}" text-anchor="middle">${Math.round(v)}</text>`; }).join('');
   return svg(sx + D + m, fy + H + m, 2.2 * u, `<text x="${r1(m)}" y="${r1(m)}" font-size="${r1(3 * u)}" font-weight="600">${xml(def.name)} · 단위 mm</text><g stroke="#222" stroke-width="${r1(u / 6)}" stroke-linejoin="round">${polys}</g><path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 6)}"/>${texts}`);
 }
+// 방 평면도(PNG·인쇄가 같이 쓴다): 바닥, 벽(개구부 위·아래 조각은 빼고 유리는 다른 색), 문 열림(점선), 가구 발자국(낮은 것부터)과 이름·W × D,
+// 치수: 위·왼쪽 바깥에 방 안치수, 문·창문이 있는 벽마다 바깥쪽에 모서리→개구부→모서리 이어 붙인 치수. 가구 발자국만 <polygon>이다
+export function planSVG(proj) {
+  const { room } = proj, u = Math.max(room.w, room.d) / 80, o = WT + 10 * u, P = pts => pts.map(([x, z]) => `${r1(x)},${r1(z)}`).join(' ');
+  const walls = wallBoxes(room, proj.openings).filter(b => b.kind === 'glass' || (b.kind === 'wall' && b.h >= room.h)).map(b => `<rect x="${r1(b.x)}" y="${r1(b.z)}" width="${r1(b.w)}" height="${r1(b.d)}" fill="${b.kind === 'glass' ? '#7db7d8' : '#3a424b'}"/>`).join('');
+  const doors = proj.openings.filter(o => o.type === 'door').map(o => `M${P(doorZone(room, o)).replace(/ /g, 'L')}Z`).join('');
+  const label = (t, x, y, fs, w = 400) => `<text x="${r1(x)}" y="${r1(y)}" font-size="${r1(fs)}" font-weight="${w}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="#fff" stroke-width="${r1(fs / 4)}" stroke-linejoin="round">${xml(t)}</text>`;
+  const items = proj.items.map(it => [defOf(proj, it), shape(proj, it), it]).sort((a, b) => a[1].y1 - b[1].y1);
+  const feet = items.map(([d, s]) => `<polygon points="${P(s.poly)}" fill="${partsOf(d)[0]?.color || '#ccc'}"/>`).join('');
+  const names = items.map(([d, s, it]) => label(d.name, it.x, it.z - u, 1.8 * u, 600) + label(`${Math.round(s.b.W)} × ${Math.round(s.b.D)}`, it.x, it.z + u, 1.4 * u)).join('');
+  let lines = '', texts = '';
+  const dim = (wall, s0, s1, off) => { // 벽 좌표 구간 s0~s1을 벽 바깥 off에: 치수선, 양 끝 눈금, 가운데 숫자(세로 벽은 돌려 쓴다)
+    if (s1 - s0 < 1) return;
+    const f = FRAMES[wall](room), pt = (s, t) => at(f, s, -t).map(r1).join(' '), [x, y] = at(f, (s0 + s1) / 2, -off - 1.6 * u).map(r1);
+    lines += `M${pt(s0, off)}L${pt(s1, off)}M${pt(s0, off - u)}L${pt(s0, off + u)}M${pt(s1, off - u)}L${pt(s1, off + u)}`;
+    texts += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central"${'WE'.includes(wall) ? ` transform="rotate(-90 ${x} ${y})"` : ''}>${Math.round(s1 - s0)}</text>`;
+  };
+  for (const wall of 'NSWE') {
+    const ops = proj.openings.filter(o => o.wall === wall), len = FRAMES[wall](room).len;
+    if (!ops.length) continue;
+    const cuts = [...new Set([0, ...ops.flatMap(o => [o.pos, o.pos + o.w]), len])].sort((a, b) => a - b);
+    cuts.slice(1).forEach((s, i) => dim(wall, cuts[i], s, WT + 2 * u));
+  }
+  dim('N', 0, room.w, WT + 6 * u); dim('W', 0, room.d, WT + 6 * u);
+  return svg(room.w + 2 * o, room.d + 2 * o, 2.2 * u, `<g transform="translate(${r1(o)} ${r1(o)})"><rect width="${room.w}" height="${room.d}" fill="${room.floor}"/>${walls}
+<path d="${doors}" fill="none" stroke="#3a424b" stroke-width="${r1(u / 8)}" stroke-dasharray="${r1(u)} ${r1(u * .7)}"/><g stroke="#3a424b" stroke-width="${r1(u / 12)}" stroke-linejoin="round">${feet}</g>${names}
+<path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 8)}"/>${texts}<text x="${r1(-WT)}" y="${r1(room.d + WT + 8.5 * u)}" font-size="${r1(2.6 * u)}" font-weight="600">${xml(proj.name)} · 단위 mm</text></g>`);
+}
 
 /* ---------- 프로젝트(방 하나). library는 계산용으로 달려 있을 뿐, 모든 방이 같은 목록을 본다(adopt) ---------- */
 const half = v => Math.round(clamp(+v || 0, -1e5, 1e5) * 2) / 2; // 가장자리를 벽에 딱 붙이려면 중심이 0.5mm 단위여야 한다
@@ -405,6 +433,30 @@ export function mergeStore(store, inc) { // 읽은 전체 백업(readStore)을 �
     store.projects.push(p);
   }
   return store.projects.length - n;
+}
+/* ---------- 공유 링크: #room= 뒤에 base64url(deflate-raw(JSON { v, ...방 })). 방에는 놓인 가구의 정의만 싣는다 ---------- */
+const MAXSHARE = 2e6; // 남이 준 링크라 압축을 풀 때 이 크기(바이트)에서 끊는다
+export async function encodeShare(proj) { // → 해시 뒤에 붙일 문자열. 압축을 못 하는 브라우저(deflate-raw가 없는 Chromium 103 전 포함)면 null
+  const used = new Set(proj.items.map(i => i.def)), json = JSON.stringify({ v: VER, ...proj, library: proj.library.filter(d => used.has(d.id)) });
+  let buf;
+  try { buf = new Uint8Array(await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); } catch { return null; }
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 8192) bin += String.fromCharCode(...buf.subarray(i, i + 8192));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+export async function decodeShare(s) { // → sanitize를 거친 방. 더 새 버전이면 { newer: true }, 못 읽으면 null(예외를 던지지 않는다)
+  if (!s || typeof DecompressionStream === 'undefined') return null;
+  try {
+    const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/')), r = new Blob([Uint8Array.from(bin, ch => ch.charCodeAt(0))]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(), parts = [];
+    for (let n = 0; ;) {
+      const { done, value } = await r.read();
+      if (done) break;
+      if ((n += value.length) > MAXSHARE) { r.cancel().catch(() => {}); return null; }
+      parts.push(value);
+    }
+    const raw = JSON.parse(await new Blob(parts).text());
+    return raw?.v > VER ? { newer: true } : sanitize(raw);
+  } catch { return null; }
 }
 export function newProject(name, example, lib) { // lib: 이미 있는 가구 목록. 없으면 기본 가구로 시작
   const L = {}, mk = (key, name, kind, params = {}) => (L[key] = { id: uid(), name, kind, params });

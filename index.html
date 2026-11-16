@@ -55,13 +55,14 @@
 </head>
 <body>
 <header>
-  <button class="ib txt room" data-a="rooms" aria-label="방 바꾸기"><span id="pname"></span>▾</button>
-  <div class="seg" role="group" aria-label="작업 모드"><button data-a="mode" data-v="room">배치</button><button data-a="mode" data-v="lib">가구</button><button data-a="mode" data-v="design">설계</button></div>
+  <div id="shared"><span></span><button class="btn pri" data-a="copyShared">내 방으로 복사</button><button class="btn" data-a="closeShared">닫기</button></div>
+  <button class="ib txt room edit" data-a="rooms" aria-label="방 바꾸기"><span id="pname"></span>▾</button>
+  <div class="seg edit" role="group" aria-label="작업 모드"><button data-a="mode" data-v="room">배치</button><button data-a="mode" data-v="lib">가구</button><button data-a="mode" data-v="design">설계</button></div>
   <span class="sp"></span>
-  <button class="ib" data-a="undo" aria-label="되돌리기">↶</button>
-  <button class="ib" data-a="redo" aria-label="다시 실행">↷</button>
+  <button class="ib edit" data-a="undo" aria-label="되돌리기">↶</button>
+  <button class="ib edit" data-a="redo" aria-label="다시 실행">↷</button>
   <div class="seg" role="group" aria-label="보기"><button data-a="view" data-v="3d">3D</button><button data-a="view" data-v="plan">평면</button></div>
-  <button class="ib txt exp" data-a="exports">내보내기</button>
+  <button class="ib txt exp edit" data-a="exports">내보내기</button>
 </header>
 <main id="stage">
   <canvas id="c"></canvas>
@@ -85,6 +86,7 @@
   <div class="row"><button class="btn pri" data-a="start">이 치수로 시작</button><button class="btn">예시 방 둘러보기</button></div>
 </form></dialog>
 <div id="toast" role="status"></div>
+<div id="print"></div>
 <input type="file" id="file" accept=".json,application/json" hidden>
 <script type="module" src="src/app.js"></script>
 </body>

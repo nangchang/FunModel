@@ -303,3 +303,37 @@ test('useDef: 규격 가구를 공용 목록에 한 번만 넣고, 저장·되�
   assert.ok(M.findDef(lib, CATALOG.find(c => c.name === '3인 소파')), '예시 목록의 3인 소파와 내용이 같다');
   assert.equal(M.findDef(lib, { ...e, name: '세탁기' }), undefined, '이름이 다르면 다른 가구');
 });
+
+test('공유 링크: 왕복하면 배치·문·방 치수가 같고, 가구 목록에는 놓인 가구만 싣는다', async () => {
+  const p = example(), s = await M.encodeShare(p), r = await M.decodeShare(s);
+  assert.match(s, /^[A-Za-z0-9_-]+$/);
+  assert.ok(s.length < 2000, String(s.length));
+  assert.deepEqual([r.name, r.room, r.openings, r.items], [p.name, p.room, p.openings, p.items]);
+  assert.deepEqual(r.library.map(d => d.id).sort(), [...new Set(p.items.map(i => i.def))].sort());
+  assert.ok(r.library.length < p.library.length, '놓이지 않은 가구는 빠진다');
+  const named = { ...p, name: '<b>"방"</b>&', library: p.library.map(d => ({ ...d, name: d.name + '<i>' })) };
+  const back = await M.decodeShare(await M.encodeShare(named));
+  assert.deepEqual([back.name, back.library[0].name.endsWith('<i>')], ['<b>"방"</b>&', true]);
+});
+
+test('공유 링크: 쓰레기·빈 문자열은 null, 더 새 버전은 newer, 너무 크게 풀리면 null', async () => {
+  const pack = async o => Buffer.from(await new Response(new Blob([JSON.stringify(o)]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()).toString('base64url');
+  for (const bad of ['', 'abc', '!!!!', '%%%', 'AAAAAAAA']) assert.equal(await M.decodeShare(bad), null, bad);
+  assert.equal(await M.decodeShare(await pack({ v: 2 })), null, '방이 없다');
+  assert.deepEqual(await M.decodeShare(await pack({ ...example(), v: 3 })), { newer: true });
+  assert.equal((await M.decodeShare(await pack(example()))).items.length, 6, '다른 인코더로 만든 것도 읽는다');
+  assert.equal(await M.decodeShare(await pack({ ...example(), pad: 'x'.repeat(3e6) })), null, '2MB 넘게 풀리면 끊는다');
+  const CS = globalThis.CompressionStream;
+  try { globalThis.CompressionStream = class { constructor() { throw new TypeError('deflate-raw 없음'); } }; assert.equal(await M.encodeShare(example()), null, '압축을 못 하면 null'); } finally { globalThis.CompressionStream = CS; }
+});
+
+test('평면도 SVG: 가구 발자국, 방·문·창문 치수, 이름 escape, 돌린 가구', () => {
+  const p = example(), svg = M.planSVG(p), nums = [...svg.matchAll(/>(\d+)<\/text>/g)].map(m => +m[1]);
+  assert.equal(svg.match(/<polygon /g).length, p.items.length);
+  for (const v of [4200, 3600, 1000, 900, 2300, 600, 1400, 1600]) assert.ok(nums.includes(v), String(v)); // 방 가로·세로, 아래 벽 문, 왼쪽 벽 창문
+  assert.ok(svg.includes('단위 mm') && svg.includes('퀸 침대'));
+  const odd = M.sanitize({ ...p, name: '<b>방', library: p.library.map(d => ({ ...d, name: '<b>' + d.name })), items: p.items.map(i => ({ ...i, rot: 33 })) });
+  const s2 = M.planSVG(odd);
+  assert.ok(!s2.includes('<b>') && s2.includes('&#60;b&#62;방'));
+  assert.ok(!/NaN|Infinity|undefined/.test(s2));
+});

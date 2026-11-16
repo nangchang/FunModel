@@ -36,6 +36,7 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 - 저장: localStorage `funmodel-v2`. 형식은 `dumpStore`(쓰기)·`readStore`(읽기, v1도 같은 경로)이고 이것이 곧 전체 백업 파일이다. 예전 `funmodel-v1`(방마다 목록)은 처음 열 때 읽어 합치고 원본은 그대로 둔다. 둘 다 없으면(`fresh`) 예시 방 위에 첫 화면 `<dialog id="start">`(방 치수로 시작 / 예시 둘러보기)를 띄우고, 닫힐 때까지 `flush`가 저장하지 않는다(`locked`와 따로).
 - 버전: 저장본의 `v`가 `VER`보다 크면(더 새 앱이 씀) 예시로 시작하고 `flush`가 저장하지 않는다(`locked`). 불러온 파일이면 거절한다. 저장본을 못 읽으면 예시로 덮어쓰기 전에 원문을 `funmodel-v2-bad`에 옮긴다.
 - 전체 백업 불러오기는 `mergeStore`: 지우지 않고 더한다. 가구는 `adopt`, 방은 내용이 같으면 건너뛰고 id만 겹치면 새 id. 원판 설정은 그대로 두고, 되돌리기 기록은 비운다.
+- 공유 링크: `#room=` 뒤에 base64url(deflate-raw(JSON `{ v, ...방 }`)). 방의 library에는 놓인 가구의 정의만 싣는다. `encodeShare(proj)`·`decodeShare(str)`(비동기, 더 새 버전이면 `{ newer: true }`, 못 읽으면 null, 풀린 크기 2MB에서 끊음)가 model.js에 있다.
 - 원판 설정 `store.cut = { L, W, kerf }`(판재 배치용, `cutOpts`가 범위를 맞춘다)은 공구 설정이라 저장본 최상위에 있다. 방 백업(.json)에는 들어가지 않고 되돌리기 대상도 아니다.
 
 ### 간섭 판정 (`checker`, `conflicts`)
@@ -51,6 +52,8 @@ node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 �
 - 가구 검색(`ui.q`, 입력 `.q`)은 예외로 다시 그리지 않는다. `#pbody`의 `input` 이벤트에서 `[data-n]`(소문자 이름)의 `hidden`만 바꾸고(`filterQ`), 비게 된 `.grp`(분류 묶음)도 숨긴다. `renderPanel`도 그린 뒤 `filterQ`를 부른다. 분류는 `ui.cat`(기본 '전체', 칩은 `tabs(..., 'chips')`).
 - 헤더: 방 이름 버튼(`rooms`: 방 목록·새 방·복제·삭제)과 `내보내기`(`exports`: 내보내기·백업). 둘 다 `<dialog id="menu">` 하나에 내용만 바꿔 띄운다. 방 삭제는 확인 없이 지우고 `toast(msg, undo)`의 [되돌리기](8초)로 되살린다.
 - 모드 `ui.mode`: `room`(배치) / `lib`(가구 관리, 미리보기만) / `design`(설계). 보기 `ui.view`: `3d` / `plan`(정사영, 회전 잠금). 장면은 변경 때마다 통째로 다시 만들고, 그리기는 `invalidate()`로 필요할 때만 한다.
+- 공유 링크로 열면 보기 상태(`viewing`, 모듈 최상위 await로 풀고 시작)다. 받은 방이 `proj`지만 store에는 넣지 않는다: `setProj`는 store를 건드리지 않고 `flush`·`commit`·되돌리기·끌기·고르기·키보드가 막힌다. `body.viewing`이 패널과 헤더의 `.edit` 버튼을 숨기고 `#shared` 막대를 보인다. [내 방으로 복사]는 파일에서 방을 불러올 때와 같은 `addProject`를 쓴다.
+- 평면도는 `planSVG`(치수 포함) 하나를 PNG(이미지로 읽어 캔버스에)와 인쇄(`#print`에 넣고 `window.print()`)가 같이 쓴다.
 - 터치는 "이미 고른 가구만 끌린다", 마우스는 바로 끈다(화면 돌리기와 구분). 설계 화면의 부품은 TransformControls로 옮기거나 돌린다.
 
 ## 관례

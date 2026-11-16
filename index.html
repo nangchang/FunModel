@@ -55,12 +55,13 @@
 </head>
 <body>
 <header>
-  <button class="ib" data-a="menu" aria-label="방 목록·내보내기 메뉴">☰</button>
+  <button class="ib txt room" data-a="rooms" aria-label="방 바꾸기"><span id="pname"></span>▾</button>
   <div class="seg" role="group" aria-label="작업 모드"><button data-a="mode" data-v="room">배치</button><button data-a="mode" data-v="lib">가구</button><button data-a="mode" data-v="design">설계</button></div>
   <span class="sp"></span>
   <button class="ib" data-a="undo" aria-label="되돌리기">↶</button>
   <button class="ib" data-a="redo" aria-label="다시 실행">↷</button>
   <div class="seg" role="group" aria-label="보기"><button data-a="view" data-v="3d">3D</button><button data-a="view" data-v="plan">평면</button></div>
+  <button class="ib txt exp" data-a="exports">내보내기</button>
 </header>
 <main id="stage">
   <canvas id="c"></canvas>
@@ -73,6 +74,16 @@
   <div id="pbody"></div>
 </section>
 <dialog id="menu"></dialog>
+<dialog id="start"><form method="dialog">
+  <h2>내 방에 가구를 놓아 봅니다</h2>
+  <p class="hint">방 치수를 넣고 시작하세요. 설치·가입이 없고 데이터는 이 브라우저에만 저장됩니다.</p>
+  <div class="grid"><!-- min·max를 달지 않는다: 검사에 걸리면 대화상자가 닫히지 않는다. 범위는 sanitize가 맞춘다 -->
+    <label class="fld"><span>가로</span><input type="number" inputmode="numeric" name="w" value="4200"><em>mm</em></label>
+    <label class="fld"><span>세로</span><input type="number" inputmode="numeric" name="d" value="3600"><em>mm</em></label>
+    <label class="fld"><span>천장 높이</span><input type="number" inputmode="numeric" name="h" value="2400"><em>mm</em></label>
+  </div>
+  <div class="row"><button class="btn pri" data-a="start">이 치수로 시작</button><button class="btn">예시 방 둘러보기</button></div>
+</form></dialog>
 <div id="toast" role="status"></div>
 <input type="file" id="file" accept=".json,application/json" hidden>
 <script type="module" src="src/app.js"></script>

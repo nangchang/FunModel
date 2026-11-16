@@ -371,8 +371,9 @@ export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 �
 }
 // 가구 목록은 방과 따로 하나만 둔다(모든 방이 같이 쓴다). 방에 딸려 온 목록(백업 파일·v1 저장본)을 거기에 합친다:
 // 내용이 같은 가구는 있던 것을 쓰고, id만 겹치고 내용이 다르면 새 id로 넣는다. p.items의 def도 따라 바꾼다
+const same = (a, b) => JSON.stringify({ ...a, id: 0 }) === JSON.stringify({ ...b, id: 0 }); // id만 빼고 내용이 같은가
 export function adopt(library, p) {
-  const same = (a, b) => JSON.stringify({ ...a, id: 0 }) === JSON.stringify({ ...b, id: 0 }), old = [...library], map = new Map();
+  const old = [...library], map = new Map();
   for (const d of p.library) {
     let e = old.find(e => e.id === d.id && same(e, d)) || old.find(e => same(e, d));
     if (!e) library.push(e = library.some(e => e.id === d.id) ? { ...d, id: uid() } : d);
@@ -382,6 +383,10 @@ export function adopt(library, p) {
   p.library = library;
   return p;
 }
+// 규격 가구 { name, kind, params } → 공용 목록의 가구. sanitize가 만드는 모양(키 순서·채운 params)과 같게 만들어 견준다
+const defOfEntry = ({ name, kind, params }) => ({ id: uid(), name, kind, params: paramsOf({ kind, params }) });
+export const findDef = (library, e) => { const d = defOfEntry(e); return library.find(x => same(x, d)); }; // 내용이 같은 가구(없으면 undefined)
+export function useDef(library, e) { return findDef(library, e) || library[library.push(defOfEntry(e)) - 1]; } // 있으면 그것, 없으면 새 id로 넣는다
 /* ---------- 저장본 = 전체 백업 파일: { v, cur, library, projects(방마다 library 없음), cut } ---------- */
 export const VER = 2; // 저장본 형식 버전. 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
 export const dumpStore = s => JSON.stringify({ v: VER, ...s, projects: s.projects.map(({ library, ...p }) => p) });

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import * as M from './model.js';
+import { CATALOG, CATS } from './catalog.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
@@ -12,9 +13,12 @@ const size = b => `${fmt(b.W)} × ${fmt(b.D)} × ${fmt(b.H)}`;
 /* ---------- 상태 ---------- */
 const KEY = 'funmodel-v2'; // v2: 가구 목록(library)이 방 밖에 하나. v1(방마다 목록)은 읽어서 합치고 원본은 그대로 둔다
 let locked = false; // 더 새 앱이 쓴 저장본: 예시로 시작하되 덮어쓰지 않게 저장을 막는다
+let fresh = false; // 저장본이 전혀 없음: 첫 화면(#start)에서 고르기 전까지 저장하지 않는다
 function load() {
   try {
-    const r = M.readStore(JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem('funmodel-v1')));
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem('funmodel-v1');
+    fresh = raw === null;
+    const r = M.readStore(JSON.parse(raw));
     if (r?.newer) locked = true; else if (r) return r;
   } catch { /* 저장본이 없거나 깨졌으면 예시로 시작 */ }
   if (!locked) try { const raw = localStorage.getItem(KEY); if (raw) localStorage.setItem(KEY + '-bad', raw); } catch { /* 못 옮겨도 시작은 한다 */ } // 예시로 덮어쓰기 전에 원문을 남긴다
@@ -24,7 +28,7 @@ function load() {
 const store = load();
 if (locked) window.fmBar?.('지금은 저장되지 않습니다', '이 저장본은 더 새 버전에서 만들었습니다. 새로 고침하세요(예전 화면이 캐시에 남았을 수 있습니다).', true); // index.html의 오류 안내 막대
 let proj = store.projects.find(p => p.id === store.cur) || store.projects[0];
-const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null };
+const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체' }; // q: 가구 검색어, cat: 가구 탭의 분류
 const hist = { undo: [], redo: [] };
 let bad = { items: new Map(), doors: new Set() };
 
@@ -47,11 +51,16 @@ let saveT = 0, toastT = 0;
 function save() { clearTimeout(saveT); saveT = setTimeout(flush, 400); }
 function flush() {
   clearTimeout(saveT);
-  if (locked) return;
+  if (locked || fresh) return;
   try { localStorage.setItem(KEY, M.dumpStore(store)); } catch { toast('저장하지 못했습니다. 브라우저 저장 공간을 확인하세요'); }
 }
 addEventListener('pagehide', flush);
-function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2600); }
+function toast(msg, undo) { // undo: 주면 [되돌리기] 버튼을 달고 8초 보여 준다. 사라지면 잊는다
+  const el = $('#toast'), b = undo && document.createElement('button');
+  el.textContent = msg;
+  if (b) { b.textContent = '되돌리기'; b.onclick = () => { el.classList.remove('show'); b.onclick = null; undo(); }; el.append(b); }
+  el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => { el.classList.remove('show'); if (b) b.onclick = null; }, b ? 8000 : 2600);
+}
 
 /* ---------- three.js 장면 (장면 단위 = mm) ---------- */
 const stage = $('#stage'), canvas = $('#c');
@@ -282,9 +291,17 @@ const text = (label, f, v) => `<label class="fld"><span>${label}</span><input ty
 const sel = (label, f, v, opts) => `<label class="fld"><span>${label}</span><select data-f="${f}">${opts.map(([k, t]) => `<option value="${esc(k)}"${k === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
 const colorFld = (label, f, v) => `<div class="fld wide"><span>${label}</span><div class="sw">${M.COLORS.map(([n, c]) => `<button title="${n}" aria-label="${n}" style="background:${c}" data-a="set" data-f="${f}" data-v="${c}"${c === v ? ' class="on"' : ''}></button>`).join('')}<input type="color" data-f="${f}" value="${v}" aria-label="${label} 색 직접 고르기"></div></div>`;
 const btn = (label, a, attrs = '', cls = '') => `<button class="btn ${cls}" data-a="${a}" ${attrs}>${label}</button>`;
-const tabs = (k, list) => `<nav class="tabs">${list.map(([v, t]) => `<button data-a="tab" data-k="${k}" data-v="${v}"${v === ui[k] ? ' class="on"' : ''}>${t}</button>`).join('')}</nav>`;
+const tabs = (k, list, cls = 'tabs') => `<nav class="${cls}">${list.map(([v, t]) => `<button data-a="tab" data-k="${k}" data-v="${v}"${v === ui[k] ? ' class="on"' : ''}>${t}</button>`).join('')}</nav>`;
 const head = (title, sub, why) => `<div class="head"><h2>${esc(title)}</h2><small>${sub}</small>${why ? `<span class="pill bad">${why}</span>` : ''}<button class="x" data-a="desel" aria-label="선택 해제">✕</button></div>`;
 
+// 가구 검색: 글자마다 [data-n](소문자 이름)을 숨기기만 하고 패널은 다시 그리지 않는다(입력 포커스·한글 조합이 끊기지 않게). 다시 그린 뒤에도 같은 필터를 건다
+const search = '<input type="search" class="q" placeholder="가구 이름 검색" aria-label="가구 이름 검색" maxlength="60">';
+function filterQ() {
+  const q = ui.q.trim().toLowerCase(), body = $('#pbody'), box = body.querySelector('.q');
+  if (box && box.value !== ui.q) box.value = ui.q; // 다시 그린 입력에만(입력 중 값을 건드리면 한글 조합이 끊긴다)
+  body.querySelectorAll('[data-n]').forEach(el => { el.hidden = !el.dataset.n.includes(q); });
+  body.querySelectorAll('.grp').forEach(g => { g.hidden = !g.querySelector('[data-n]:not([hidden])'); }); // 비게 된 분류 소제목도 숨긴다
+}
 function roomPanel() {
   const it = selItem(), o = selOpen(), { room } = proj;
   if (it) {
@@ -302,9 +319,12 @@ function roomPanel() {
       <div class="row">${btn('삭제', 'del', '', 'danger')}</div>`;
   }
   return tabs('tab', [['add', '가구'], ['room', '방'], ['open', '문·창문']]) + {
-    add: () => `<div class="cards">${proj.library.map(d => `<div class="card"><button data-a="add" data-id="${esc(d.id)}"><b>${esc(d.name)}</b><small>${size(M.bounds(M.partsOf(d)))}</small></button><button class="mini" data-a="mode" data-v="design" data-id="${esc(d.id)}">설계</button></div>`).join('')}
-      <div class="card new"><button data-a="newDefUI">＋ 새 가구</button></div></div>
-      <p class="hint">가구 목록은 모든 방이 함께 씁니다(설계를 고치면 다른 방에 놓인 것도 바뀝니다). 가구를 누르면 방의 빈자리에 놓입니다. 놓인 가구는 눌러서 고른 뒤 끌어 옮깁니다(마우스는 바로 끌기).</p>`,
+    add: () => `${search}${tabs('cat', ['전체', '내 가구', ...CATS].map(c => [c, c]), 'chips')}
+      ${['전체', '내 가구'].includes(ui.cat) ? `<div class="grp"><h3>내 가구</h3><div class="cards">${proj.library.map(d => `<div class="card" data-n="${esc(d.name.toLowerCase())}"><button data-a="add" data-id="${esc(d.id)}"><b>${esc(d.name)}</b><small>${size(M.bounds(M.partsOf(d)))}</small></button><button class="mini" data-a="mode" data-v="design" data-id="${esc(d.id)}">설계</button></div>`).join('')}
+      <div class="card new" data-n=""><button data-a="newDefUI">＋ 새 가구</button></div></div></div>` : ''}
+      ${CATS.filter(c => ui.cat === '전체' || ui.cat === c).map(c => `<div class="grp"><h3>${c}</h3><div class="cards">${CATALOG.map((e, i) => e.cat === c && !M.findDef(proj.library, e) ? `<div class="card" data-n="${esc(e.name.toLowerCase())}"><button data-a="addCat" data-i="${i}"><b>${esc(e.name)}</b><small>${size(M.bounds(M.partsOf(e)))}</small></button></div>` : '').join('')}</div></div>`).join('')}
+      <p class="hint">가구 목록은 모든 방이 함께 씁니다(설계를 고치면 다른 방에 놓인 것도 바뀝니다). 가구를 누르면 방의 빈자리에 놓입니다. 놓인 가구는 눌러서 고른 뒤 끌어 옮깁니다(마우스는 바로 끌기).</p>
+      <p class="hint">규격 가구는 대표 치수입니다. 놓은 뒤 '설계 수정'에서 실제 제품 치수로 고치세요.</p>`,
     room: () => `<div class="grid">${text('방 이름', 'proj.name', proj.name)}${fld('가로', 'room.w', room.w)}${fld('세로', 'room.d', room.d)}${fld('천장 높이', 'room.h', room.h)}
       ${sel('끌기 격자', 'room.snap', String(room.snap), [['0', '없음'], ['10', '10 mm'], ['50', '50 mm'], ['100', '100 mm']])}${colorFld('벽', 'room.wall', room.wall)}${colorFld('바닥', 'room.floor', room.floor)}</div>`,
     open: () => `${proj.openings.length ? `<div class="list">${proj.openings.map(o => `<button data-a="pick" data-id="${esc(o.id)}"><span>${o.type === 'door' ? '문' : '창문'} · ${WALLS.find(w => w[0] === o.wall)[1]}</span><small>${fmt(o.w)} × ${fmt(o.h)}</small></button>`).join('')}</div>` : '<p class="hint">아직 문이나 창문이 없습니다.</p>'}
@@ -318,7 +338,7 @@ function libPanel() { // 가구 관리: 방과 상관없이 공용 가구 목록
   return `<div class="head"><h2>가구 관리</h2><small>${proj.library.length}개 · 모든 방이 함께 씁니다</small></div>
     ${d ? `<div class="grid">${text('이름', 'def.name', d.name)}</div>
     <div class="row">${btn('설계 수정', 'mode', 'data-v="design"', 'pri')}${btn('방에 놓기', 'place')}${btn('복제', 'dupDef')}${btn(n ? `삭제 (모든 방에 놓인 ${n}개도)` : '삭제', 'delDef', '', 'danger')}</div>` : ''}
-    <div class="list">${proj.library.map(x => { const u = usedN(x.id); return `<button data-a="set" data-f="ui.defId" data-v="${esc(x.id)}"${x === d ? ' class="on"' : ''}><i class="dot" style="background:${M.partsOf(x)[0]?.color || '#ccc'}"></i><span>${esc(x.name)}</span><small>${size(M.bounds(M.partsOf(x)))}${u ? ` · ${u}개 놓임` : ''}</small></button>`; }).join('')}</div>
+    ${search}<div class="list">${proj.library.map(x => { const u = usedN(x.id); return `<button data-n="${esc(x.name.toLowerCase())}" data-a="set" data-f="ui.defId" data-v="${esc(x.id)}"${x === d ? ' class="on"' : ''}><i class="dot" style="background:${M.partsOf(x)[0]?.color || '#ccc'}"></i><span>${esc(x.name)}</span><small>${size(M.bounds(M.partsOf(x)))}${u ? ` · ${u}개 놓임` : ''}</small></button>`; }).join('')}</div>
     <div class="row">${btn('＋ 새 가구', 'newDefUI')}${btn('가구만 내보내기 (.json)', 'lib')}${btn('가구 파일 불러오기', 'import')}</div>
     <p class="hint">가구만 내보낸 파일에는 방이 들어가지 않습니다. 불러오면 목록에 없는 가구만 더해집니다.</p>`;
 }
@@ -355,11 +375,11 @@ function renderPanel() { // 다음 프레임에 그린다: Tab으로 옮겨 간 
   panelRaf = requestAnimationFrame(() => {
     const body = $('#pbody'), a = document.activeElement, f = body.contains(a) && a.matches('input,select') && a.dataset.f, top = body.scrollTop;
     body.innerHTML = { room: roomPanel, lib: libPanel, design: designPanel }[ui.mode]();
-    body.scrollTop = top;
+    filterQ(); body.scrollTop = top;
     if (f) body.querySelector(`:is(input,select)[data-f="${f}"]`)?.focus();
     document.querySelectorAll('header [data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === ui[b.dataset.a]));
     $('[data-a=undo]').disabled = !hist.undo.length; $('[data-a=redo]').disabled = !hist.redo.length;
-    document.title = `${proj.name} — FunModel`;
+    document.title = `${proj.name} — FunModel`; $('#pname').textContent = proj.name;
   });
 }
 
@@ -387,8 +407,8 @@ function freeSpot(it) { // 방 가운데에서 가까운 순으로 100mm 격자�
   if (!spot) toast('빈자리가 없어 가운데에 놓았습니다');
   return spot || [w / 2, d / 2];
 }
-function addItem(base) {
-  commit(() => { const it = { ...base, id: M.uid() }; [it.x, it.z] = freeSpot(it); proj.items.push(it); ui.sel = { type: 'item', id: it.id }; });
+function addItem(base) { // base가 함수면 commit 안에서 부른다(규격 가구를 목록에 넣는 것까지 되돌리기 한 번에)
+  commit(() => { const it = { ...(typeof base === 'function' ? base() : base), id: M.uid() }; [it.x, it.z] = freeSpot(it); proj.items.push(it); ui.sel = { type: 'item', id: it.id }; });
 }
 function openProject(p) {
   flush(); proj = p; hist.undo = []; hist.redo = [];
@@ -439,6 +459,7 @@ const ACT = {
   pick: d => { ui.sel = { type: 'open', id: d.id }; rebuild(); renderPanel(); },
   // 방
   add: d => addItem({ def: d.id, x: 0, z: 0, rot: 0 }),
+  addCat: d => addItem(() => ({ def: M.useDef(proj.library, CATALOG[d.i]).id, x: 0, z: 0, rot: 0 })), // 규격 가구: 공용 목록에 넣고(있으면 그것) 놓는다
   dup: () => addItem(selItem()),
   rot: d => commit(() => { selItem().rot += +d.v; }),
   onTop: () => commit(() => { const it = selItem(), s = M.shape(proj, it); it.y = Math.max(0, ...proj.items.filter(o => o !== it).map(o => M.shape(proj, o)).filter(t => M.overlap(s.poly, t.poly)).map(t => t.y1)); }), // 발자국이 겹치는 가구 중 가장 높은 윗면으로
@@ -460,12 +481,15 @@ const ACT = {
   dupPart: () => commit(() => { const p = M.part({ ...selPart(), id: M.uid(), x: selPart().x + 50 }); curDef().parts.push(p); ui.partId = p.id; }),
   turnPart: d => commit(() => { const p = selPart(), [a, b] = d.v; [p[a], p[b]] = [p[b], p[a]]; }), // 90° 회전 = 두 치수 맞바꾸기. 최소 모서리는 그대로
   delPart: () => commit(() => { const d = curDef(); d.parts = d.parts.filter(p => p.id !== ui.partId); ui.partId = null; }),
-  // 메뉴: 방 목록, 내보내기
-  menu: () => {
-    const d = designDef();
+  // 헤더의 두 대화상자(#menu 하나를 내용만 바꿔 쓴다): 방 목록, 내보내기·백업
+  rooms: () => {
     menu.innerHTML = `<div><h3>방</h3><div class="list">${store.projects.map(p => `<button data-a="proj" data-id="${esc(p.id)}"${p === proj ? ' class="on"' : ''}><span>${esc(p.name)}</span><small>${fmt(p.room.w)} × ${fmt(p.room.d)}</small></button>`).join('')}</div>
-      <div class="row">${btn('＋ 새 방', 'newProj')}${btn('이 방 복제', 'dupProj')}${btn('이 방 삭제', 'delProj', '', 'danger')}</div>
-      <h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg') : btn('평면도 (.png)', 'png')}</div>
+      <div class="row">${btn('＋ 새 방', 'newProj')}${btn('이 방 복제', 'dupProj')}${btn('이 방 삭제', 'delProj', '', 'danger')}</div></div>`;
+    menu.showModal();
+  },
+  exports: () => {
+    const d = designDef();
+    menu.innerHTML = `<div><h3>내보내기 — ${d ? esc(d.name) : '방 전체'}</h3><div class="row">${btn('SketchUp용 3D (.dae)', 'dae')}${d ? btn('재단 목록 (.csv)', 'csv') + btn('도면 (.svg)', 'svg') : btn('평면도 (.png)', 'png')}</div>
       <h3>백업</h3><div class="row">${btn('이 방만 저장 (.json)', 'json')}${btn('전체 백업 (.json)', 'backup')}${btn('파일에서 불러오기', 'import')}</div>
       <p class="hint">이 방만 저장하면 그 방과 가구 목록이, 전체 백업에는 모든 방이 들어갑니다. 전체 백업을 불러오면 지우지 않고 없는 방만 더합니다.</p>
       <a class="hint" href="https://github.com/nangchang/FunModel/issues" target="_blank" rel="noopener">의견·오류 알리기</a></div>`;
@@ -474,11 +498,21 @@ const ACT = {
   proj: d => openProject(store.projects.find(p => p.id === d.id)),
   newProj: () => { const p = M.newProject(`방 ${store.projects.length + 1}`, false, store.library); store.projects.push(p); openProject(p); },
   dupProj: () => { const p = M.sanitize({ ...JSON.parse(JSON.stringify(proj)), id: M.uid(), name: proj.name + ' 복사' }); store.projects.push(p); openProject(p); },
-  delProj: () => {
-    if (!confirm(`"${proj.name}" 방을 지울까요? 되돌릴 수 없습니다.`)) return;
-    store.projects.splice(store.projects.indexOf(proj), 1);
-    if (!store.projects.length) store.projects.push(M.newProject('방 1', false, store.library));
+  delProj: () => { // 바로 지우고 알림에서 되돌린다. 지운 방은 알림이 떠 있는 동안 메모리에만 있다
+    const gone = proj, i = store.projects.indexOf(gone), auto = store.projects.length === 1 && M.newProject('방 1', false, store.library);
+    store.projects.splice(i, 1);
+    if (auto) store.projects.push(auto);
     openProject(store.projects[0]);
+    toast(`"${gone.name}" 방을 지웠습니다`, () => {
+      const a = auto && store.projects.find(p => p.id === auto.id); // 방은 바뀔 때마다 새 객체(sanitize)라 id로 찾는다
+      if (a && !a.items.length && !a.openings.length) store.projects.splice(store.projects.indexOf(a), 1); // 저절로 생긴 빈 '방 1'은 같이 없앤다
+      store.projects.splice(Math.min(i, store.projects.length), 0, gone); openProject(gone);
+    });
+  },
+  start: () => { // 첫 화면 "이 치수로 시작": 예시 방을 빼고 그 치수의 빈 방으로(공용 가구 목록은 그대로). 값 범위는 sanitize가 맞춘다
+    const v = k => { const el = $(`#start [name=${k}]`); return el.value || el.defaultValue; }, p = M.newProject('내 방', false, store.library); // 빈 칸은 보이던 기본값으로
+    Object.assign(p.room, { w: v('w'), d: v('d'), h: v('h') }); store.projects = [p]; openProject(p); fresh = false;
+    toast('문·창문 탭에서 문과 창을 넣어 보세요');
   },
   dae: () => { const d = designDef(); download((d || proj).name + '.dae', M.toDAE(M.exportNodes(proj, d)), 'model/vnd.collada+xml'); },
   csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows, M.buyList(M.partsOf(d))), 'text/csv'); }, // BOM: 엑셀 한글
@@ -492,6 +526,8 @@ const ACT = {
 };
 document.addEventListener('click', e => { const el = e.target.closest('[data-a]'); if (el) ACT[el.dataset.a]?.(el.dataset); });
 menu.addEventListener('click', e => { if (e.target === menu || e.target.closest('[data-a]')) menu.close(); }); // 바깥을 누르거나 항목을 고르면 닫힘
+$('#pbody').addEventListener('input', e => { if (e.target.matches('.q')) { ui.q = e.target.value; filterQ(); } }); // 검색은 data-f·apply를 타지 않는다
+$('#start').addEventListener('close', () => { fresh = false; save(); }); // 첫 화면: 어느 쪽으로 닫든 고른 것이니 그때부터 저장한다
 $('#pbody').addEventListener('change', e => {
   const el = e.target, f = el.dataset.f;
   if (!f) return;
@@ -537,4 +573,5 @@ addEventListener('keydown', e => {
 });
 
 setView(); renderPanel();
+if (fresh) $('#start').showModal(); // 예시 방을 뒤에 그려 두고 그 위에 띄운다
 window.app = { M, ui, store, get proj() { return proj; }, get camera() { return camera; } }; // 콘솔 디버깅용

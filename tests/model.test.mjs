@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from '../src/model.js';
+import { CATALOG, CATS } from '../src/catalog.js';
 
 const example = () => M.newProject('예시', true);
 const defNamed = (p, name) => p.library.find(d => d.name === name);
@@ -276,4 +277,29 @@ test('문·서랍 열림 공간이 막혔는지 본다', () => {
   assert.equal(blocked(scene(['dr', 2000, 1000], ['box', 2000, front + 300, 0])), true);
   assert.equal(zones(scene(['box', 2000, 2000])).length, 0, '문·서랍이 없는 가구');
   const ex = example(); assert.deepEqual(ex.items.flatMap(it => M.openZones(ex, it)).filter(z => z.blocked), [], '예시 방은 막힌 곳이 없다');
+});
+
+test('규격 가구 목록: 개수, 이름, 분류, 생성기 범위 안의 치수', () => {
+  assert.ok(CATALOG.length >= 30 && CATALOG.length <= 50, String(CATALOG.length));
+  assert.equal(new Set(CATALOG.map(c => c.name)).size, CATALOG.length, '이름 중복 없음');
+  for (const c of CATALOG) {
+    assert.ok(CATS.includes(c.cat) && Object.hasOwn(M.KINDS, c.kind), c.name);
+    const pv = M.paramsOf(c), parts = M.partsOf(c), b = M.bounds(parts);
+    for (const [k, v] of Object.entries(c.params)) assert.equal(pv[k], v, `${c.name} ${k}`); // 범위 밖이면 paramsOf가 바꾼다
+    assert.ok(parts.length > 0 && [b.W, b.D, b.H].every(Number.isFinite), c.name);
+  }
+  assert.equal(M.paramsOf(CATALOG.find(c => c.name === '퀸 침대 (1500)')).W - 40, 1500, '침대 가로 = 매트리스 + 40');
+});
+
+test('useDef: 규격 가구를 공용 목록에 한 번만 넣고, 저장·되돌리기(sanitize)를 거쳐도 같은 가구로 찾는다', () => {
+  const lib = example().library, n = lib.length, e = CATALOG.find(c => c.name === '드럼 세탁기');
+  assert.equal(M.findDef(lib, e), undefined);
+  const d = M.useDef(lib, e);
+  assert.deepEqual([lib.length, M.useDef(lib, e), lib.length], [n + 1, d, n + 1]);
+  const again = M.sanitize({ room: {}, library: lib }).library; // 매 변경 뒤의 경로
+  assert.equal(M.findDef(again, e).id, d.id);
+  assert.equal(M.useDef(again, e).id, d.id);
+  assert.equal(again.length, n + 1);
+  assert.ok(M.findDef(lib, CATALOG.find(c => c.name === '3인 소파')), '예시 목록의 3인 소파와 내용이 같다');
+  assert.equal(M.findDef(lib, { ...e, name: '세탁기' }), undefined, '이름이 다르면 다른 가구');
 });

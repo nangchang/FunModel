@@ -152,21 +152,19 @@ export function wallBoxes(room, openings) { // kind: wall | top(개구부 위, �
 
 /* ---------- 간섭 판정 ---------- */
 export const defOf = (proj, it) => proj.library.find(d => d.id === it.def);
-function rect(it, x0, z0, x1, z1) { // 가구 로컬(중심 기준) 사각형 → 방 좌표 꼭짓점
-  const co = Math.cos(it.rot * DEG), si = Math.sin(it.rot * DEG);
-  return [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => [it.x + x * co + z * si, it.z - x * si + z * co]);
-}
-export function shape(proj, it) { // 방에 놓인 모양: 가구 전체의 발자국·높이 구간과 부품별 기운 상자
-  const b = bounds(partsOf(defOf(proj, it))), poly = rect(it, -b.W / 2, -b.D / 2, b.W / 2, b.D / 2), parts = partsOf(defOf(proj, it)).map(p => solid(it, p, b));
+const spot = (it, x, z) => { const co = Math.cos(it.rot * DEG), si = Math.sin(it.rot * DEG); return [it.x + x * co + z * si, it.z - x * si + z * co]; }; // 가구 로컬(중심 기준) 점 → 방 좌표
+const rect = (it, x0, z0, x1, z1) => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => spot(it, x, z));
+export function shape(proj, it) { // 방에 놓인 모양: 가구 전체의 발자국·높이 구간(바닥에서 it.y만큼 띄운 값)과 부품별 기운 상자
+  const b = bounds(partsOf(defOf(proj, it))), y = it.y || 0, poly = rect(it, -b.W / 2, -b.D / 2, b.W / 2, b.D / 2), parts = partsOf(defOf(proj, it)).map(p => solid(it, p, b));
   // minx~maxz: 방 안에서 실제로 차지하는 범위(부품 기준). 비스듬히 놓은 가구는 감싸는 사각형 poly보다 좁고, 중심에 대칭이 아닐 수 있다
   const span = i => (parts.length ? parts.flatMap(p => [p.c[i] - p.e[i], p.c[i] + p.e[i]]) : poly.map(p => p[i / 2])), xs = span(0), zs = span(2);
-  return { b, poly, y0: b.y0, y1: b.y1, low: b.y1 <= 30 /* 러그 등은 겹쳐도 된다 */, minx: Math.min(...xs), maxx: Math.max(...xs), minz: Math.min(...zs), maxz: Math.max(...zs), parts };
+  return { b, poly, y0: b.y0 + y, y1: b.y1 + y, low: b.y1 + y <= 30 /* 러그 등은 겹쳐도 된다. 높이 건 얇은 선반은 아니다 */, minx: Math.min(...xs), maxx: Math.max(...xs), minz: Math.min(...zs), maxz: Math.max(...zs), parts };
 }
 function solid(it, p, b) { // 부품 하나를 방 좌표의 기운 상자로: 중심 c, 단위 축 u[3], 반치수 h, 감싸는 축 정렬 상자의 반치수 e
-  const co = Math.cos(it.rot * DEG), si = Math.sin(it.rot * DEG), R = rotOf(p), h = [p.w / 2, p.h / 2, p.d / 2], lx = p.x + h[0] - b.cx, lz = p.z + h[2] - b.cz;
+  const co = Math.cos(it.rot * DEG), si = Math.sin(it.rot * DEG), R = rotOf(p), h = [p.w / 2, p.h / 2, p.d / 2], lx = p.x + h[0] - b.cx, lz = p.z + h[2] - b.cz, cy = (it.y || 0) + p.y + h[1];
   const u = [0, 1, 2].map(j => [R[0][j] * co + R[2][j] * si, R[1][j], R[2][j] * co - R[0][j] * si]); // 가구 회전 · 부품 회전
   const e = [0, 1, 2].map(i => Math.abs(u[0][i]) * h[0] + Math.abs(u[1][i]) * h[1] + Math.abs(u[2][i]) * h[2]);
-  return { c: [it.x + lx * co + lz * si, p.y + h[1], it.z - lx * si + lz * co], u, h, e, y0: p.y + h[1] - e[1] };
+  return { c: [it.x + lx * co + lz * si, cy, it.z - lx * si + lz * co], u, h, e, y0: cy - e[1] };
 }
 function hull(pts) { // 볼록 껍질(단조 사슬)
   pts = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -202,7 +200,7 @@ export function checker(proj) { // 가구 하나(놓아 볼 후보 포함)의 �
   const zones = proj.openings.filter(o => o.type === 'door').map(o => [o, doorZone(room, o)]);
   return it => {
     const s = shape(proj, it), doors = s.low ? [] : zones.filter(([o, z]) => s.parts.some(p => p.y0 < o.h && overlap(foot(p), z))).map(([o]) => o.id);
-    const why = s.minx < -1 || s.minz < -1 || s.maxx > room.w + 1 || s.maxz > room.d + 1 ? '벽 밖' : doors.length ? '문 막음'
+    const why = s.minx < -1 || s.minz < -1 || s.maxx > room.w + 1 || s.maxz > room.d + 1 ? '벽 밖' : s.y1 > room.h + 1 ? '천장 넘음' : doors.length ? '문 막음'
       : !s.low && shapes.some(([id, t]) => id !== it.id && !t.low && hit(s, t)) ? '겹침' : null;
     return { why, doors };
   };
@@ -211,6 +209,20 @@ export function conflicts(proj) {
   const chk = checker(proj), items = new Map(), doors = new Set();
   for (const it of proj.items) { const r = chk(it); if (r.why) items.set(it.id, r.why); r.doors.forEach(d => doors.add(d)); }
   return { items, doors };
+}
+// 가구의 문·서랍을 여는 데 드는 바닥 영역 → [{ poly, y0, y1, blocked }] (방 좌표). role이 붙은 부품만 본다(생성기 가구)
+// 막힘: 영역이 방 밖으로 나가거나, 다른 가구 부품의 바닥 그림자와 겹치면서 높이 구간도 겹칠 때. 러그는 뺀다
+export function openZones(proj, it) {
+  const { room } = proj, parts = partsOf(defOf(proj, it)), b = bounds(parts), at = (x, z) => spot(it, x - b.cx, z - b.cz);
+  const others = proj.items.filter(o => o.id !== it.id).map(o => shape(proj, o)).filter(s => !s.low);
+  return parts.filter(p => p.role).map(p => {
+    const f = p.z + p.d, y0 = (it.y || 0) + p.y, y1 = y0 + p.h, L = p.role === 'doorL', hx = L ? p.x : p.x + p.w, len = p.z - BACK - 20; // len: 서랍이 나오는 길이(buyList의 레일과 같은 기준)
+    const poly = p.role === 'drawer' ? [at(p.x, f), at(p.x + p.w, f), at(p.x + p.w, f + len), at(p.x, f + len)] // 서랍: 앞판 폭 × 나오는 길이
+      : [at(hx, f), ...[0, 1, 2, 3, 4, 5, 6].map(i => at(hx + (L ? 1 : -1) * p.w * Math.cos(i * Math.PI / 12), f + p.w * Math.sin(i * Math.PI / 12)))]; // 문: 경첩 모서리 중심의 부채꼴
+    const blocked = poly.some(([x, z]) => x < -1 || z < -1 || x > room.w + 1 || z > room.d + 1)
+      || others.some(s => s.parts.some(q => q.y0 < y1 - 1 && q.c[1] + q.e[1] > y0 + 1 && overlap(foot(q), poly)));
+    return { poly, y0, y1, blocked };
+  });
 }
 
 /* ---------- 재단 목록 ---------- */
@@ -273,10 +285,10 @@ export function nest(rows, o) {
 /* ---------- DAE (COLLADA 1.4.1, Z_UP, mm) ---------- */
 // 내보낼 묶음: 가구 하나만(def) 또는 방 전체. 묶음마다 상자는 묶음 로컬 좌표(y↑)
 export function exportNodes(proj, def) {
-  const node = (d, x = 0, z = 0, rot = 0) => { const parts = partsOf(d), b = bounds(parts); return { name: d.name, x, z, rot, boxes: parts.map(p => ({ ...p, x: p.x - b.cx, z: p.z - b.cz })) }; };
+  const node = (d, x = 0, z = 0, rot = 0, y = 0) => { const parts = partsOf(d), b = bounds(parts); return { name: d.name, x, y, z, rot, boxes: parts.map(p => ({ ...p, x: p.x - b.cx, z: p.z - b.cz })) }; };
   if (def) return [node(def)];
   const { room } = proj, walls = wallBoxes(room, proj.openings).filter(b => b.kind !== 'glass').map(b => ({ ...b, name: '벽', color: room.wall }));
-  return [{ name: '방', x: 0, z: 0, rot: 0, boxes: [{ name: '바닥', x: 0, y: -50, z: 0, w: room.w, d: room.d, h: 50, color: room.floor }, ...walls] }, ...proj.items.map(it => node(defOf(proj, it), it.x, it.z, it.rot))];
+  return [{ name: '방', x: 0, z: 0, rot: 0, boxes: [{ name: '바닥', x: 0, y: -50, z: 0, w: room.w, d: room.d, h: 50, color: room.floor }, ...walls] }, ...proj.items.map(it => node(defOf(proj, it), it.x, it.z, it.rot, it.y))];
 }
 const xml = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
 // 꼭짓점 번호 = X비트 + 2·Y비트 + 4·Z비트. 면마다 바깥에서 볼 때 반시계: -Z +Z -Y +Y -X +X
@@ -289,7 +301,7 @@ export function toDAE(nodes) {
   nodes.forEach((n, ni) => {
     // y-up의 y축 회전 θ는 (X,Y,Z) = (x,−z,y)에서 Z축 회전 +θ가 된다(det = +1, 면 방향 유지)
     const co = f(Math.cos(n.rot * DEG)), si = f(Math.sin(n.rot * DEG));
-    scene += `<node id="n${ni}" name="${xml(n.name)}"><matrix>${co} ${-si} 0 ${n.x} ${si} ${co} 0 ${-n.z} 0 0 1 0 0 0 0 1</matrix>`;
+    scene += `<node id="n${ni}" name="${xml(n.name)}"><matrix>${co} ${-si} 0 ${n.x} ${si} ${co} 0 ${-n.z} 0 0 1 ${n.y || 0} 0 0 0 1</matrix>`;
     for (const b of n.boxes) {
       const id = 'g' + gi++, R = rotOf(b), h = [b.w / 2, b.h / 2, b.d / 2], c = [b.x + h[0], -(b.z + h[2]), b.y + h[1]], v = [];
       const zup = (x, y, z) => { const r = R.map(r => r[0] * x + r[1] * y + r[2] * z); return [r[0], -r[2], r[1]]; }; // 부품 회전 후 Z_UP으로
@@ -354,7 +366,7 @@ export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 �
   const room = { w: num(r.w, 4000, 500, 30000), d: num(r.d, 3000, 500, 30000), h: num(r.h, 2400, 1000, 6000), wall: hex(r.wall) || '#f2f0eb', floor: hex(r.floor) || '#d6c3a6', snap: [0, 10, 50, 100].includes(+r.snap) ? +r.snap : 50 };
   const library = arr(raw.library).filter(d => d.kind === 'custom' || Object.hasOwn(KINDS, d.kind))
     .map(d => ({ id: str(d.id, uid()), name: str(d.name, '가구'), kind: d.kind, ...(d.kind === 'custom' ? { parts: arr(d.parts).map(part) } : { params: paramsOf(d) }) }));
-  const items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), z: half(i.z), rot: turn(i.rot) }));
+  const items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), y: num(i.y, 0, 0, 6000), z: half(i.z), rot: turn(i.rot) }));
   return { id: str(raw.id, uid()), name: str(raw.name, '방'), room, openings: arr(raw.openings).map(o => fixOpening(room, o)), library, items };
 }
 // 가구 목록은 방과 따로 하나만 둔다(모든 방이 같이 쓴다). 방에 딸려 온 목록(백업 파일·v1 저장본)을 거기에 합친다:

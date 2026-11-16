@@ -104,12 +104,13 @@ function buildRoom() {
   }
   for (const it of proj.items) {
     const d = M.defOf(proj, it), parts = M.partsOf(d), b = M.bounds(parts), g = new THREE.Group(), on = ui.sel?.id === it.id, why = bad.items.get(it.id);
-    g.position.set(it.x, 0, it.z); g.rotation.y = it.rot * M.DEG; g.userData.item = it.id;
+    g.position.set(it.x, it.y, it.z); g.rotation.y = it.rot * M.DEG; g.userData.item = it.id;
     for (const p of parts) g.add(box({ ...p, x: p.x - b.cx, z: p.z - b.cz }, p.color));
     if (on || why) g.add(outline({ x: -b.W / 2 - 5, y: 0, z: -b.D / 2 - 5, w: b.W + 10, h: b.y1 + 5, d: b.D + 10 }, why ? L.bad : L.sel));
     world.add(g); pick.push(g);
-    if (ui.view === 'plan') labels.push({ v: new THREE.Vector3(it.x, b.y1, it.z), text: d.name, cls: 'name' });
-    if (on) { // 선택한 가구에서 네 벽까지 거리
+    if (ui.view === 'plan') labels.push({ v: new THREE.Vector3(it.x, it.y + b.y1, it.z), text: d.name, cls: 'name' });
+    if (on) { // 선택한 가구에서 네 벽까지 거리, 문·서랍을 여는 데 드는 바닥(막히면 빨강)
+      for (const z of M.openZones(proj, it)) { const l = new THREE.LineLoop(geom(z.poly.flatMap(([x, v]) => [x, 4, v])), z.blocked ? L.bad : L.door); l.renderOrder = 9; world.add(l); }
       const s = M.shape(proj, it), y = 5;
       dim([0, y, it.z], [s.minx, y, it.z]); dim([s.maxx, y, it.z], [room.w, y, it.z]); dim([it.x, y, 0], [it.x, y, s.minz]); dim([it.x, y, s.maxz], [it.x, y, room.d]);
     }
@@ -285,10 +286,10 @@ function roomPanel() {
   const it = selItem(), o = selOpen(), { room } = proj;
   if (it) {
     const d = M.defOf(proj, it), s = M.shape(proj, it);
-    return `${head(d.name, size(s.b) + ' mm', bad.items.get(it.id))}
+    return `${head(d.name, size(s.b) + ' mm', bad.items.get(it.id) || (M.openZones(proj, it).some(z => z.blocked) && '열림 막힘'))}
       <div class="row">${[[90, '↺ 90°'], [15, '↺ 15°'], [-15, '↻ 15°'], [-90, '↻ 90°']].map(([v, t]) => btn(t, 'rot', `data-v="${v}"`)).join('')}</div>
-      <div class="grid">${fld('왼쪽 벽에서', 'item.left', Math.round(s.minx), 'mm', '')}${fld('위쪽 벽에서', 'item.top', Math.round(s.minz), 'mm', '')}${fld('회전', 'item.rot', it.rot, '°', -360)}</div>
-      <div class="row">${btn('복제', 'dup')}${btn('설계 수정', 'mode', `data-v="design" data-id="${esc(d.id)}"`)}${btn('삭제', 'del', '', 'danger')}</div>`;
+      <div class="grid">${fld('왼쪽 벽에서', 'item.left', Math.round(s.minx), 'mm', '')}${fld('위쪽 벽에서', 'item.top', Math.round(s.minz), 'mm', '')}${fld('회전', 'item.rot', it.rot, '°', -360)}${fld('바닥에서', 'item.y', it.y)}</div>
+      <div class="row">${btn('아래 가구 위에 올리기', 'onTop')}${btn('복제', 'dup')}${btn('설계 수정', 'mode', `data-v="design" data-id="${esc(d.id)}"`)}${btn('삭제', 'del', '', 'danger')}</div>`;
   }
   if (o) {
     const door = o.type === 'door', horiz = 'NS'.includes(o.wall), ends = horiz ? ['왼쪽', '오른쪽'] : ['위쪽', '아래쪽'];
@@ -364,7 +365,7 @@ const SET = { // data-f="범위.키" 입력이 바뀌면 호출 (v: 숫자로 �
   proj: (k, v, raw) => { proj.name = raw; },
   room: (k, v) => { proj.room[k] = v; },
   open: (k, v) => { selOpen()[k] = v; },
-  item: (k, v) => { const it = selItem(), s = M.shape(proj, it); if (k === 'rot') it.rot = v; else if (k === 'left') it.x += v - s.minx; else it.z += v - s.minz; },
+  item: (k, v) => { const it = selItem(), s = M.shape(proj, it); if (k === 'rot' || k === 'y') it[k] = v; else if (k === 'left') it.x += v - s.minx; else it.z += v - s.minz; },
   def: (k, v, raw) => { curDef().name = raw; },
   param: (k, v) => { const d = curDef(); d.params = { ...d.params, [k]: v }; },
   part: (k, v, raw) => { selPart()[k] = k === 'name' ? raw : v; },
@@ -437,6 +438,7 @@ const ACT = {
   add: d => addItem({ def: d.id, x: 0, z: 0, rot: 0 }),
   dup: () => addItem(selItem()),
   rot: d => commit(() => { selItem().rot += +d.v; }),
+  onTop: () => commit(() => { const it = selItem(), s = M.shape(proj, it); it.y = Math.max(0, ...proj.items.filter(o => o !== it).map(o => M.shape(proj, o)).filter(t => M.overlap(s.poly, t.poly)).map(t => t.y1)); }), // 발자국이 겹치는 가구 중 가장 높은 윗면으로
   del: () => commit(() => { proj.items = proj.items.filter(i => i.id !== ui.sel.id); proj.openings = proj.openings.filter(o => o.id !== ui.sel.id); }),
   addOpen: d => commit(() => { const o = M.fixOpening(proj.room, { type: d.v, wall: 'N', pos: (proj.room.w - 900) / 2 }); proj.openings.push(o); ui.sel = { type: 'open', id: o.id }; }),
   // 가구 설계

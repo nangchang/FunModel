@@ -212,3 +212,43 @@ test('치수 도면: 부품마다 세 그림, 전체 치수, 이름 escape, 돌�
   const one = M.drawingSVG({ name: 'a', kind: 'custom', parts: [M.part({ w: 100, d: 10, h: 100, z: 90, color: '#111111' }), M.part({ w: 100, d: 10, h: 100, z: 0, color: '#eeeeee' })] });
   assert.deepEqual([...one.matchAll(/fill="(#[0-9a-f]{6})"\/>/g)].slice(2, 4).map(m => m[1]), ['#eeeeee', '#111111']);
 });
+
+test('가구 높이(y): 위에 올리면 안 겹치고, 천장을 넘으면 알려 준다', () => {
+  const library = [{ id: 'desk', name: '책상', kind: 'table' }, { id: 'box', name: '상자', kind: 'box', params: { W: 300, D: 300, H: 800 } },
+    { id: 'dr', name: '서랍장', kind: 'drawers' }, { id: 'sh', name: '벽 선반', kind: 'box', params: { W: 800, D: 250, H: 20 } }];
+  const scene = (...items) => M.sanitize({ room: { w: 4000, d: 4000, h: 2400 }, openings: [{ type: 'door', wall: 'N', pos: 1000, w: 900, h: 2100 }], library, items: items.map(([def, x, z, y]) => ({ id: def, def, x, z, y })) });
+  const why = (p, id) => M.conflicts(p).items.get(id) ?? null;
+  assert.equal(why(scene(['desk', 2000, 2000], ['box', 2000, 2000, 0]), 'box'), '겹침'); // 책상(높이 730) 상판을 뚫는다
+  assert.equal(why(scene(['desk', 2000, 2000], ['box', 2000, 2000, 730]), 'box'), null);
+  let p = scene(['dr', 2000, 2000], ['sh', 2000, 2000, 1500]);
+  assert.equal(why(p, 'sh'), null); assert.equal(M.shape(p, p.items[1]).low, false, '높이 건 얇은 선반은 러그가 아니다');
+  assert.equal(M.shape(p, { ...p.items[1], y: 0 }).low, true);
+  assert.equal(why(scene(['sh', 1450, 300, 1000]), 'sh'), '문 막음');
+  assert.equal(why(scene(['sh', 1450, 300, 2200]), 'sh'), null, '문 높이(2100)보다 위');
+  assert.equal(why(scene(['box', 2000, 2000, 1700]), 'box'), '천장 넘음');
+  p = scene(['box', 2000, 2000, -50]); assert.equal(p.items[0].y, 0);
+  assert.equal(M.sanitize(JSON.parse(JSON.stringify({ ...p, items: [{ def: 'box', x: 1, z: 1 }] }))).items[0].y, 0, 'y가 없는 예전 저장본');
+  assert.ok(M.toDAE(M.exportNodes(scene(['box', 2000, 2000, 730]))).includes('0 0 1 730 0 0 0 1</matrix>'), 'DAE의 Z 이동');
+});
+
+test('문·서랍 열림 공간이 막혔는지 본다', () => {
+  const library = [{ id: 'w', name: '옷장', kind: 'cabinet', params: { W: 1200, D: 600, H: 2200, doors: 2 } }, { id: 'dr', name: '서랍장', kind: 'drawers' },
+    { id: 'bed', name: '침대', kind: 'bed' }, { id: 'rug', name: '러그', kind: 'box', params: { W: 1500, D: 1000, H: 10 } }, { id: 'box', name: '상자', kind: 'box' }];
+  const scene = (...items) => M.sanitize({ room: { w: 4000, d: 4000, h: 2400 }, library, items: items.map(([def, x, z, y]) => ({ id: def, def, x, z, y })) });
+  const zones = (p, id = p.items[0].id) => M.openZones(p, p.items.find(i => i.id === id)), blocked = p => zones(p).some(z => z.blocked);
+  const half = id => M.bounds(M.partsOf(scene().library.find(d => d.id === id))).D / 2; // 중심에서 앞면까지
+  // 아래쪽 벽(z = 4000)을 보는 옷장: 문 폭은 약 600
+  assert.equal(zones(scene(['w', 2000, 4000 - 300 - half('w')])).length, 2);
+  assert.equal(blocked(scene(['w', 2000, 4000 - 300 - half('w')])), true);
+  assert.equal(blocked(scene(['w', 2000, 4000 - 1000 - half('w')])), false);
+  // 서랍장 앞
+  const front = 1000 + half('dr');
+  assert.equal(zones(scene(['dr', 2000, 1000])).length, 4);
+  assert.equal(blocked(scene(['dr', 2000, 1000])), false);
+  assert.equal(blocked(scene(['dr', 2000, 1000], ['bed', 2000, front + half('bed')])), true);
+  assert.equal(blocked(scene(['dr', 2000, 1000], ['rug', 2000, front + 500])), false, '러그는 통과');
+  assert.equal(blocked(scene(['dr', 2000, 1000], ['box', 2000, front + 300, 1200])), false, '서랍보다 위에 뜬 상자는 통과');
+  assert.equal(blocked(scene(['dr', 2000, 1000], ['box', 2000, front + 300, 0])), true);
+  assert.equal(zones(scene(['box', 2000, 2000])).length, 0, '문·서랍이 없는 가구');
+  const ex = example(); assert.deepEqual(ex.items.flatMap(it => M.openZones(ex, it)).filter(z => z.blocked), [], '예시 방은 막힌 곳이 없다');
+});

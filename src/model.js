@@ -116,41 +116,82 @@ export function bounds(parts) {
 }
 
 /* ---------- 방·벽·문 ---------- */
-// 벽 좌표계: o = 시작 모서리, u = 벽을 따라가는 방향, n = 방 안쪽. 위치는 평면도 기준 왼쪽/위쪽 모서리에서 잰다
-const FRAMES = { N: r => ({ o: [0, 0], u: [1, 0], n: [0, 1], len: r.w }), S: r => ({ o: [0, r.d], u: [1, 0], n: [0, -1], len: r.w }), W: r => ({ o: [0, 0], u: [0, 1], n: [1, 0], len: r.d }), E: r => ({ o: [r.w, 0], u: [0, 1], n: [-1, 0], len: r.d }) };
+// 방 = 축 정렬 사각형 조각(room.parts: x,z = 최소 모서리)의 합집합. room.w·d는 원점부터 감싸는 크기
+export const inside = (room, x, z) => room.parts.some(p => p.x <= x && x <= p.x + p.w && p.z <= z && z <= p.z + p.d);
+function grid(room) { // 조각 경계(와 0, 감싸는 크기)로 나눈 압축 격자: 칸 (i, j) = xs[i]~xs[i+1] × zs[j]~zs[j+1]. 격자 밖은 방 밖
+  const cut = (a, b, L) => [...new Set([0, L, ...room.parts.flatMap(p => [p[a], p[a] + p[b]])])].sort((m, n) => m - n), xs = cut('x', 'w', room.w), zs = cut('z', 'd', room.d), mid = (v, i) => (v[i] + v[i + 1]) / 2;
+  const box = xs.slice(1).map((_, i) => zs.slice(1).map((_, j) => inside(room, mid(xs, i), mid(zs, j))));
+  return { xs, zs, in: (i, j) => !!box[i]?.[j] };
+}
+export function cells(room) { // 칸을 줄마다 이어 붙인 사각형 { x, z, w, d }: inn = 방 안(서로 안 겹침), out = 감싸는 상자 안의 방 밖
+  const { xs, zs, in: on } = grid(room), r = { inn: [], out: [] };
+  for (let j = 0; j + 1 < zs.length; j++) for (let i = 0; i + 1 < xs.length;) {
+    const k = i, v = on(i, j);
+    while (i + 1 < xs.length && on(i, j) === v) i++;
+    r[v ? 'inn' : 'out'].push({ x: xs[k], z: zs[j], w: xs[i] - xs[k], d: zs[j + 1] - zs[j] });
+  }
+  return r;
+}
+// 둘레 벽 조각 [{ wall, at, s0, s1 }]: wall = 방의 위쪽(N, 벽 아래가 방)/아래쪽(S)/왼쪽(W)/오른쪽(E) 벽, at = 벽 선의 z(N·S)·x(W·E), s0~s1 = 벽을 따라가는 절대 좌표. 한 줄로 이어지면 하나로
+export function segs(room) {
+  const { xs, zs, in: on } = grid(room), out = [];
+  const scan = (wall, lines, cuts, edge) => { for (let a = 0; a < lines.length; a++) for (let i = 0; i + 1 < cuts.length; i++) if (edge(a, i)) {
+    const last = out.at(-1);
+    if (last?.wall === wall && last.at === lines[a] && last.s1 === cuts[i]) last.s1 = cuts[i + 1]; else out.push({ wall, at: lines[a], s0: cuts[i], s1: cuts[i + 1] });
+  } };
+  scan('N', zs, xs, (j, i) => on(i, j) && !on(i, j - 1)); scan('S', zs, xs, (j, i) => on(i, j - 1) && !on(i, j));
+  scan('W', xs, zs, (i, j) => on(i, j) && !on(i - 1, j)); scan('E', xs, zs, (i, j) => on(i - 1, j) && !on(i, j));
+  return out;
+}
+export const onSeg = (s, o) => s.wall === o.wall && s.at === o.at && s.s0 <= o.pos && o.pos + o.w <= s.s1; // 개구부가 이 벽 조각에 붙어 있는가
+export function reach(room, x, z) { // 점에서 왼쪽·오른쪽·위·아래로 방 안이 이어지는 끝 좌표 { x0, x1, z0, z1 }. 방 밖의 점이면 감싸는 상자
+  if (!inside(room, x, z)) return { x0: 0, x1: room.w, z0: 0, z1: room.d };
+  const P = room.parts, r = { x0: x, x1: x, z0: z, z1: z }, row = p => p.z <= z && z <= p.z + p.d, col = p => p.x <= x && x <= p.x + p.w; // 끝에 닿은 조각이 더 없을 때까지 늘린다
+  for (let k; (k = P.filter(p => row(p) && p.x < r.x0 && r.x0 <= p.x + p.w)).length;) r.x0 = Math.min(...k.map(p => p.x));
+  for (let k; (k = P.filter(p => row(p) && p.x <= r.x1 && r.x1 < p.x + p.w)).length;) r.x1 = Math.max(...k.map(p => p.x + p.w));
+  for (let k; (k = P.filter(p => col(p) && p.z < r.z0 && r.z0 <= p.z + p.d)).length;) r.z0 = Math.min(...k.map(p => p.z));
+  for (let k; (k = P.filter(p => col(p) && p.z <= r.z1 && r.z1 < p.z + p.d)).length;) r.z1 = Math.max(...k.map(p => p.z + p.d));
+  return r;
+}
+// 벽 좌표계(벽 조각이나 개구부의 wall·at으로): o = 벽 선 위의 원점, u = 벽을 따라가는 방향, n = 방 안쪽. s는 절대 좌표(N·S는 x, W·E는 z)
+const FRAMES = { N: r => ({ o: [0, r.at], u: [1, 0], n: [0, 1] }), S: r => ({ o: [0, r.at], u: [1, 0], n: [0, -1] }), W: r => ({ o: [r.at, 0], u: [0, 1], n: [1, 0] }), E: r => ({ o: [r.at, 0], u: [0, 1], n: [-1, 0] }) };
 const at = (f, s, t) => [f.o[0] + f.u[0] * s + f.n[0] * t, f.o[1] + f.u[1] * s + f.n[1] * t];
-export function spanBox(room, wall, s0, s1, t0, t1, y0, y1) { // 벽 좌표 구간 → 상자
-  const f = FRAMES[wall](room), a = at(f, s0, t0), b = at(f, s1, t1);
+export function spanBox(sg, s0, s1, t0, t1, y0, y1) { // 벽 좌표 구간 → 상자. sg = { wall, at }
+  const f = FRAMES[sg.wall](sg), a = at(f, s0, t0), b = at(f, s1, t1);
   return { x: Math.min(a[0], b[0]), z: Math.min(a[1], b[1]), y: y0, w: Math.abs(a[0] - b[0]), d: Math.abs(a[1] - b[1]), h: y1 - y0 };
 }
+// 같은 방향 벽 조각 중 at이 가장 가까운 줄, 그 안에서 pos가 가장 가까운 구간에 붙인다. at이 없으면(예전 저장본) 바깥 벽(N·W는 가장 작은 줄, S·E는 가장 큰 줄). 300mm 못 되는 벽은 가능하면 피한다
 export function fixOpening(room, o) {
-  const door = o.type !== 'window', wall = ['N', 'S', 'W', 'E'].includes(o.wall) ? o.wall : 'S', len = FRAMES[wall](room).len;
-  const w = num(o.w, 900, 300, len), h = num(o.h, door ? 2100 : 1200, 300, room.h);
-  return { id: str(o.id, uid()), type: door ? 'door' : 'window', wall, pos: num(o.pos, 0, 0, len - w), w, h, sill: door ? 0 : num(o.sill, 900, 0, room.h - h), hinge: o.hinge === 'b' ? 'b' : 'a', swing: o.swing === 'out' ? 'out' : 'in' };
+  const door = o.type !== 'window', wall = ['N', 'S', 'W', 'E'].includes(o.wall) ? o.wall : 'S', all = segs(room).filter(s => s.wall === wall), long = all.filter(s => s.s1 - s.s0 >= 300), ss = long.length ? long : all;
+  const ats = ss.map(s => s.at), want = Number.isFinite(o.at) ? o.at : 'NW'.includes(wall) ? Math.min(...ats) : Math.max(...ats), line = ats.reduce((b, a) => (Math.abs(a - want) < Math.abs(b - want) ? a : b));
+  const p = +o.pos || 0, gap = s => Math.max(s.s0 - p, p - s.s1, 0), sg = ss.filter(s => s.at === line).reduce((b, s) => (gap(s) < gap(b) ? s : b));
+  const w = num(o.w, 900, 300, sg.s1 - sg.s0), h = num(o.h, door ? 2100 : 1200, 300, room.h);
+  return { id: str(o.id, uid()), type: door ? 'door' : 'window', wall, at: sg.at, pos: num(o.pos, sg.s0, sg.s0, sg.s1 - w), w, h, sill: door ? 0 : num(o.sill, 900, 0, room.h - h), hinge: o.hinge === 'b' ? 'b' : 'a', swing: o.swing === 'out' ? 'out' : 'in' };
 }
 export function fixBlock(room, b) { // 기둥·붙박이: 방 좌표의 축 정렬 상자. x,z = 최소 모서리, h = 바닥부터 높이(기본 방 높이)
   const w = num(b.w, 400, 50, room.w), d = num(b.d, 400, 50, room.d);
   return { id: str(b.id, uid()), x: num(b.x, 0, 0, room.w - w), z: num(b.z, 0, 0, room.d - d), w, d, h: num(b.h, room.h, 50, room.h) };
 }
-export function doorZone(room, o) { // 비워 둬야 하는 바닥 영역(볼록 다각형): 안쪽 열림은 문이 쓸고 가는 부채꼴, 아니면 문 앞 100mm
-  const f = FRAMES[o.wall](room);
+export function doorZone(o) { // 비워 둬야 하는 바닥 영역(볼록 다각형): 안쪽 열림은 문이 쓸고 가는 부채꼴, 아니면 문 앞 100mm
+  const f = FRAMES[o.wall](o);
   if (o.swing !== 'in') return [at(f, o.pos, 0), at(f, o.pos + o.w, 0), at(f, o.pos + o.w, 100), at(f, o.pos, 100)];
   const h = o.hinge === 'b' ? o.pos + o.w : o.pos, dir = o.hinge === 'b' ? -1 : 1, pts = [at(f, h, 0)];
   for (let i = 0; i <= 6; i++) pts.push(at(f, h + dir * o.w * Math.cos(i * Math.PI / 12), o.w * Math.sin(i * Math.PI / 12)));
   return pts;
 }
 export function wallBoxes(room, openings, blocks = []) { // kind: wall | top(개구부 위, 평면에서는 숨김) | glass | block(기둥·붙박이, wall 없음)
-  const out = [];
-  for (const wall of 'NSWE') {
-    const len = FRAMES[wall](room).len, ext = 'NS'.includes(wall) ? WT : 0; // 위·아래 벽이 모서리를 채운다
-    const add = (kind, s0, s1, y0, y1, t0 = -WT, t1 = 0) => { if (s1 - s0 >= 1 && y1 - y0 >= 1) out.push({ wall, kind, ...spanBox(room, wall, s0, s1, t0, t1, y0, y1) }); };
-    let s = -ext;
-    for (const o of openings.filter(o => o.wall === wall).sort((a, b) => a.pos - b.pos)) {
+  const out = [], inn = cells(room).inn;
+  for (const sg of segs(room)) {
+    // 위·아래 벽이 볼록한 모서리를 채운다: 끝 너머 바깥쪽 WT×WT 칸이 방과 조금도 안 겹칠 때만(오목한 모서리에서 늘리면 방 안을 침범한다)
+    const { wall } = sg, ext = (a, b) => { const q = spanBox(sg, a, b, -WT, 0, 0, 0); return 'NS'.includes(wall) && !inn.some(c => c.x < q.x + q.w && q.x < c.x + c.w && c.z < q.z + q.d && q.z < c.z + c.d) ? WT : 0; };
+    const add = (kind, s0, s1, y0, y1, t0 = -WT, t1 = 0) => { if (s1 - s0 >= 1 && y1 - y0 >= 1) out.push({ wall, kind, ...spanBox(sg, s0, s1, t0, t1, y0, y1) }); };
+    let s = sg.s0 - ext(sg.s0 - WT, sg.s0);
+    for (const o of openings.filter(o => onSeg(sg, o)).sort((a, b) => a.pos - b.pos)) {
       add('wall', s, o.pos, 0, room.h); add('wall', o.pos, o.pos + o.w, 0, o.sill); add('top', o.pos, o.pos + o.w, o.sill + o.h, room.h);
       if (o.type === 'window') add('glass', o.pos, o.pos + o.w, o.sill, o.sill + o.h, -WT / 2 - 10, -WT / 2 + 10);
       s = Math.max(s, o.pos + o.w);
     }
-    add('wall', s, len + ext, 0, room.h);
+    add('wall', s, sg.s1 + ext(sg.s1, sg.s1 + WT), 0, room.h);
   }
   for (const b of blocks) out.push({ kind: 'block', ...b, y: 0 });
   return out;
@@ -202,12 +243,14 @@ const tall = (a, b) => a.y0 < b.y1 - 1 && b.y0 < a.y1 - 1; // 높이 구간이 �
 const apart = (p, q) => [0, 1, 2].some(i => Math.abs(p.c[i] - q.c[i]) > p.e[i] + q.e[i] - 1); // 감싸는 상자부터 떨어져 있으면 볼 것 없다
 const ZERO = { x: 0, z: 0, rot: 0 }, blockShape = b => ({ poly: rect(ZERO, b.x, b.z, b.x + b.w, b.z + b.d), y0: 0, y1: b.h, parts: [solid(ZERO, { ...b, y: 0 }, { cx: 0, cz: 0 })] }); // 기둥을 가구 모양처럼
 const hit = (a, b) => tall(a, b) && overlap(a.poly, b.poly) && a.parts.some(p => b.parts.some(q => !apart(p, q) && obbHit(p, q))); // 부품 단위라 책상 밑 의자는 통과
+// 감싸는 상자 안의 방 밖 칸 → [{ poly, apart(부품): 감싸는 상자부터 떨어졌는가 }]. '벽 밖'과 열림 막힘이 같이 쓴다(맞붙은 조각의 이음매는 방 안이라 걸려도 된다)
+const outside = room => cells(room).out.map(r => ({ poly: rect(ZERO, r.x, r.z, r.x + r.w, r.z + r.d), apart: p => p.c[0] + p.e[0] <= r.x + 1 || p.c[0] - p.e[0] >= r.x + r.w - 1 || p.c[2] + p.e[2] <= r.z + 1 || p.c[2] - p.e[2] >= r.z + r.d - 1 }));
 export function checker(proj) { // 가구 하나(놓아 볼 후보 포함)의 문제를 돌려주는 함수
   const { room } = proj, shapes = [...proj.items.map(it => [it.id, shape(proj, it)]), ...proj.blocks.map(b => [null /* 가구 id와 안 겹치게 */, blockShape(b)])];
-  const zones = proj.openings.filter(o => o.type === 'door').map(o => [o, doorZone(room, o)]);
+  const zones = proj.openings.filter(o => o.type === 'door').map(o => [o, doorZone(o)]), outs = outside(room);
   return it => {
     const s = shape(proj, it), doors = s.low ? [] : zones.filter(([o, z]) => s.parts.some(p => p.y0 < o.h && overlap(foot(p), z))).map(([o]) => o.id);
-    const why = s.minx < -1 || s.minz < -1 || s.maxx > room.w + 1 || s.maxz > room.d + 1 ? '벽 밖' : s.y1 > room.h + 1 ? '천장 넘음' : doors.length ? '문 막음'
+    const why = s.minx < -1 || s.minz < -1 || s.maxx > room.w + 1 || s.maxz > room.d + 1 || outs.some(r => s.parts.some(p => !r.apart(p) && overlap(foot(p), r.poly))) ? '벽 밖' : s.y1 > room.h + 1 ? '천장 넘음' : doors.length ? '문 막음'
       : !s.low && shapes.some(([id, t]) => id !== it.id && !t.low && hit(s, t)) ? '겹침' : null;
     return { why, doors };
   };
@@ -220,13 +263,13 @@ export function conflicts(proj) {
 // 가구의 문·서랍을 여는 데 드는 바닥 영역 → [{ poly, y0, y1, blocked }] (방 좌표). role이 붙은 부품만 본다(생성기 가구)
 // 막힘: 영역이 방 밖으로 나가거나, 다른 가구 부품·기둥의 바닥 그림자와 겹치면서 높이 구간도 겹칠 때. 러그는 뺀다
 export function openZones(proj, it) {
-  const { room } = proj, parts = partsOf(defOf(proj, it)), b = bounds(parts), at = (x, z) => spot(it, x - b.cx, z - b.cz);
+  const { room } = proj, parts = partsOf(defOf(proj, it)), b = bounds(parts), at = (x, z) => spot(it, x - b.cx, z - b.cz), outs = outside(room);
   const others = [...proj.items.filter(o => o.id !== it.id).map(o => shape(proj, o)).filter(s => !s.low), ...proj.blocks.map(blockShape)];
   return parts.filter(p => p.role).map(p => {
     const f = p.z + p.d, y0 = (it.y || 0) + p.y, y1 = y0 + p.h, L = p.role === 'doorL', hx = L ? p.x : p.x + p.w, len = p.z - BACK - 20; // len: 서랍이 나오는 길이(buyList의 레일과 같은 기준)
     const poly = p.role === 'drawer' ? [at(p.x, f), at(p.x + p.w, f), at(p.x + p.w, f + len), at(p.x, f + len)] // 서랍: 앞판 폭 × 나오는 길이
       : [at(hx, f), ...[0, 1, 2, 3, 4, 5, 6].map(i => at(hx + (L ? 1 : -1) * p.w * Math.cos(i * Math.PI / 12), f + p.w * Math.sin(i * Math.PI / 12)))]; // 문: 경첩 모서리 중심의 부채꼴
-    const blocked = poly.some(([x, z]) => x < -1 || z < -1 || x > room.w + 1 || z > room.d + 1)
+    const blocked = poly.some(([x, z]) => x < -1 || z < -1 || x > room.w + 1 || z > room.d + 1) || outs.some(r => overlap(poly, r.poly))
       || others.some(s => s.parts.some(q => q.y0 < y1 - 1 && q.c[1] + q.e[1] > y0 + 1 && overlap(foot(q), poly)));
     return { poly, y0, y1, blocked };
   });
@@ -295,7 +338,7 @@ export function exportNodes(proj, def) {
   const node = (d, x = 0, z = 0, rot = 0, y = 0) => { const parts = partsOf(d), b = bounds(parts); return { name: d.name, x, y, z, rot, boxes: parts.map(p => ({ ...p, x: p.x - b.cx, z: p.z - b.cz })) }; };
   if (def) return [node(def)];
   const { room } = proj, walls = wallBoxes(room, proj.openings, proj.blocks).filter(b => b.kind !== 'glass').map(b => ({ ...b, name: b.kind === 'block' ? '기둥' : '벽', color: room.wall }));
-  return [{ name: '방', x: 0, z: 0, rot: 0, boxes: [{ name: '바닥', x: 0, y: -50, z: 0, w: room.w, d: room.d, h: 50, color: room.floor }, ...walls] }, ...proj.items.map(it => node(defOf(proj, it), it.x, it.z, it.rot, it.y))];
+  return [{ name: '방', x: 0, z: 0, rot: 0, boxes: [...cells(room).inn.map(c => ({ name: '바닥', x: c.x, y: -50, z: c.z, w: c.w, d: c.d, h: 50, color: room.floor })), ...walls] }, ...proj.items.map(it => node(defOf(proj, it), it.x, it.z, it.rot, it.y))];
 }
 const xml = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
 // 꼭짓점 번호 = X비트 + 2·Y비트 + 4·Z비트. 면마다 바깥에서 볼 때 반시계: -Z +Z -Y +Y -X +X
@@ -368,27 +411,27 @@ export function drawingSVG(def) {
 export function planSVG(proj) {
   const { room } = proj, u = Math.max(room.w, room.d) / 80, o = WT + 10 * u, P = pts => pts.map(([x, z]) => `${r1(x)},${r1(z)}`).join(' ');
   const walls = wallBoxes(room, proj.openings, proj.blocks).filter(b => b.kind === 'glass' || b.kind === 'block' || (b.kind === 'wall' && b.h >= room.h)).map(b => `<rect x="${r1(b.x)}" y="${r1(b.z)}" width="${r1(b.w)}" height="${r1(b.d)}" fill="${b.kind === 'glass' ? '#7db7d8' : '#3a424b'}"/>`).join('');
-  const doors = proj.openings.filter(o => o.type === 'door').map(o => `M${P(doorZone(room, o)).replace(/ /g, 'L')}Z`).join('');
+  const doors = proj.openings.filter(o => o.type === 'door').map(o => `M${P(doorZone(o)).replace(/ /g, 'L')}Z`).join('');
   const label = (t, x, y, fs, w = 400) => `<text x="${r1(x)}" y="${r1(y)}" font-size="${r1(fs)}" font-weight="${w}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="#fff" stroke-width="${r1(fs / 4)}" stroke-linejoin="round">${xml(t)}</text>`;
   const items = proj.items.map(it => [defOf(proj, it), shape(proj, it), it]).sort((a, b) => a[1].y1 - b[1].y1);
   const feet = items.map(([d, s]) => `<polygon points="${P(s.poly)}" fill="${partsOf(d)[0]?.color || '#ccc'}"/>`).join('');
   const names = items.map(([d, s, it]) => label(d.name, it.x, it.z - u, 1.8 * u, 600) + label(`${Math.round(s.b.W)} × ${Math.round(s.b.D)}`, it.x, it.z + u, 1.4 * u)).join('');
   let lines = '', texts = '';
-  const dim = (wall, s0, s1, off) => { // 벽 좌표 구간 s0~s1을 벽 바깥 off에: 치수선, 양 끝 눈금, 가운데 숫자(세로 벽은 돌려 쓴다)
+  const dim = (sg, s0, s1, off) => { // 벽 sg({ wall, at })의 구간 s0~s1을 벽 바깥 off에: 치수선, 양 끝 눈금, 가운데 숫자(세로 벽은 돌려 쓴다)
     if (s1 - s0 < 1) return;
-    const f = FRAMES[wall](room), pt = (s, t) => at(f, s, -t).map(r1).join(' '), [x, y] = at(f, (s0 + s1) / 2, -off - 1.6 * u).map(r1);
+    const f = FRAMES[sg.wall](sg), pt = (s, t) => at(f, s, -t).map(r1).join(' '), [x, y] = at(f, (s0 + s1) / 2, -off - 1.6 * u).map(r1);
     lines += `M${pt(s0, off)}L${pt(s1, off)}M${pt(s0, off - u)}L${pt(s0, off + u)}M${pt(s1, off - u)}L${pt(s1, off + u)}`;
-    texts += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central"${'WE'.includes(wall) ? ` transform="rotate(-90 ${x} ${y})"` : ''}>${Math.round(s1 - s0)}</text>`;
+    texts += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central"${'WE'.includes(sg.wall) ? ` transform="rotate(-90 ${x} ${y})"` : ''}>${Math.round(s1 - s0)}</text>`;
   };
-  for (const wall of 'NSWE') {
-    const ops = proj.openings.filter(o => o.wall === wall), len = FRAMES[wall](room).len;
+  for (const sg of segs(room)) { // 개구부가 붙은 벽 조각마다 그 조각의 양 끝 기준
+    const ops = proj.openings.filter(o => onSeg(sg, o));
     if (!ops.length) continue;
-    const cuts = [...new Set([0, ...ops.flatMap(o => [o.pos, o.pos + o.w]), len])].sort((a, b) => a - b);
-    cuts.slice(1).forEach((s, i) => dim(wall, cuts[i], s, WT + 2 * u));
+    const cuts = [...new Set([sg.s0, ...ops.flatMap(o => [o.pos, o.pos + o.w]), sg.s1])].sort((a, b) => a - b);
+    cuts.slice(1).forEach((s, i) => dim(sg, cuts[i], s, WT + 2 * u));
   }
-  dim('N', 0, room.w, WT + 6 * u); dim('W', 0, room.d, WT + 6 * u);
+  dim({ wall: 'N', at: 0 }, 0, room.w, WT + 6 * u); dim({ wall: 'W', at: 0 }, 0, room.d, WT + 6 * u); // 전체(감싸는 크기)
   const g = proj.bg, under = g ? `<image href="${xml(g.src)}" x="${r1(g.x)}" y="${r1(g.z)}" width="${r1(g.w)}" height="${r1(g.w * g.ar)}" opacity="${g.op}" preserveAspectRatio="none"/>` : ''; // 밑그림: 바닥 위·가구 아래
-  return svg(room.w + 2 * o, room.d + 2 * o, 2.2 * u, `<g transform="translate(${r1(o)} ${r1(o)})"><rect width="${room.w}" height="${room.d}" fill="${room.floor}"/>${under}${walls}
+  return svg(room.w + 2 * o, room.d + 2 * o, 2.2 * u, `<g transform="translate(${r1(o)} ${r1(o)})">${room.parts.map(p => `<rect x="${p.x}" y="${p.z}" width="${p.w}" height="${p.d}" fill="${room.floor}"/>`).join('')}${under}${walls}
 <path d="${doors}" fill="none" stroke="#3a424b" stroke-width="${r1(u / 8)}" stroke-dasharray="${r1(u)} ${r1(u * .7)}"/><g stroke="#3a424b" stroke-width="${r1(u / 12)}" stroke-linejoin="round">${feet}</g>${names}
 <path d="${lines}" fill="none" stroke="#b86e00" stroke-width="${r1(u / 8)}"/>${texts}<text x="${r1(-WT)}" y="${r1(room.d + WT + 8.5 * u)}" font-size="${r1(2.6 * u)}" font-weight="600">${xml(proj.name)} · 단위 mm</text></g>`);
 }
@@ -411,7 +454,10 @@ export const bgMove = (bg, p) => ({ ...bg, x: bg.x - p[0], z: bg.z - p[1] }); //
 export function sanitize(raw) { // 저장본·불러온 JSON을 믿지 않고 형태와 범위를 맞춘다. 못 쓰면 null
   if (!raw || typeof raw !== 'object' || !raw.room || typeof raw.room !== 'object') return null;
   const arr = v => (Array.isArray(v) ? v.filter(o => o && typeof o === 'object') : []), r = raw.room;
-  const room = { w: num(r.w, 4000, 500, 30000), d: num(r.d, 3000, 500, 30000), h: num(r.h, 2400, 1000, 6000), wall: hex(r.wall) || '#f2f0eb', floor: hex(r.floor) || '#d6c3a6', snap: [0, 10, 50, 100].includes(+r.snap) ? +r.snap : 50 };
+  // 방 조각: 하나면 늘 (0,0)이고 치수는 room.w·d가 정한다(예전 저장본도). 둘 이상이면 조각이 모양을 정하고 room.w·d는 원점부터 감싸는 크기. 남이 준 링크라 개수를 막는다(격자 계산)
+  const ps = arr(r.parts).slice(0, 50).map(p => ({ id: str(p.id, uid()), x: num(p.x, 0, 0, 30000), z: num(p.z, 0, 0, 30000), w: num(p.w, 2000, 500, 30000), d: num(p.d, 2000, 500, 30000) }));
+  const parts = ps.length > 1 ? ps : [{ id: ps[0]?.id ?? 'r1' /* 정해 둔 id: 예전 백업을 두 번 불러와도 같은 방으로 보이게 */, x: 0, z: 0, w: num(r.w, 4000, 500, 30000), d: num(r.d, 3000, 500, 30000) }];
+  const room = { w: Math.max(...parts.map(p => p.x + p.w)), d: Math.max(...parts.map(p => p.z + p.d)), h: num(r.h, 2400, 1000, 6000), wall: hex(r.wall) || '#f2f0eb', floor: hex(r.floor) || '#d6c3a6', snap: [0, 10, 50, 100].includes(+r.snap) ? +r.snap : 50, parts };
   const library = arr(raw.library).filter(d => d.kind === 'custom' || Object.hasOwn(KINDS, d.kind))
     .map(d => ({ id: str(d.id, uid()), name: str(d.name, '가구'), kind: d.kind, ...(d.kind === 'custom' ? { parts: arr(d.parts).map(part) } : { params: paramsOf(d) }) }));
   const bg = fixBg(raw.bg), items = arr(raw.items).filter(i => library.some(d => d.id === String(i.def))).map(i => ({ id: str(i.id, uid()), def: String(i.def), x: half(i.x), y: num(i.y, 0, 0, 6000), z: half(i.z), rot: turn(i.rot) }));
@@ -436,7 +482,7 @@ const defOfEntry = ({ name, kind, params }) => ({ id: uid(), name, kind, params:
 export const findDef = (library, e) => { const d = defOfEntry(e); return library.find(x => same(x, d)); }; // 내용이 같은 가구(없으면 undefined)
 export function useDef(library, e) { return findDef(library, e) || library[library.push(defOfEntry(e)) - 1]; } // 있으면 그것, 없으면 새 id로 넣는다
 /* ---------- 저장본 = 전체 백업 파일: { v, cur, library, projects(방마다 library 없음), cut } ---------- */
-export const VER = 3; // 저장본 형식 버전(3: 방에 blocks·bg). 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
+export const VER = 4; // 저장본 형식 버전(3: 방에 blocks·bg, 4: room.parts와 개구부의 at·절대 pos). 더 큰 v는 더 새 앱이 쓴 것이라 읽지 않는다
 export const dumpStore = s => JSON.stringify({ v: VER, ...s, projects: s.projects.map(({ library, ...p }) => p) });
 export function readStore(s) { // 저장본·전체 백업(v1: v 없음, 방마다 library) → { cur, library, projects, cut }. 더 새 버전이면 { newer: true }, 못 읽으면 null
   if (s?.v > VER) return { newer: true };

@@ -246,3 +246,33 @@ test('좁은 화면(360px): 헤더가 넘치지 않고 가로 스크롤이 없�
   await expect(page.locator('#pbody [data-a=add]').first()).toBeVisible();
   expect(await page.evaluate(() => { const h = document.querySelector('header'), d = document.documentElement; return [h.scrollWidth <= h.clientWidth, d.scrollWidth <= d.clientWidth]; })).toEqual([true, true]);
 });
+
+test('방 조각: 더하면 ㄱ자, 방 밖 칸의 가구는 경고, 문을 꺾인 벽으로, 지우면 사각형', async ({ page }) => {
+  await example(page);
+  await page.locator('#pbody [data-a=tab][data-k=tab][data-v=room]').click();
+  await page.locator('#pbody [data-a=addPiece]').click();
+  expect(await page.evaluate(() => [app.M.segs(app.proj.room).length, app.proj.room.w, app.ui.sel?.type])).toEqual([6, 6200, 'part']);
+  await expect(page.locator('[data-f="piece.w"]')).toBeVisible();
+  await page.locator('#pbody [data-a=desel]').click();
+  await expect(page.locator('[data-f="room.w"]')).toHaveCount(0); // 조각이 둘이면 가로·세로 대신 조각 목록
+  await expect(page.locator('#pbody [data-a=pick][data-t=part]')).toHaveCount(2);
+  // 방 밖 칸(오른쪽 아래)에 가구를 놓는다
+  await page.locator('#pbody [data-a=tab][data-k=tab][data-v=add]').click();
+  await page.locator('#pbody .card', { hasText: '의자' }).locator('[data-a=add]').click();
+  for (const [f, v] of [['item.left', '5000'], ['item.top', '2800']]) { await page.locator(`[data-f="${f}"]`).fill(v); await page.locator(`[data-f="${f}"]`).press('Tab'); await frame(page); }
+  await expect(page.locator('#pbody .head .pill.bad')).toHaveText('벽 밖');
+  await page.locator('#pbody [data-a=del]').click();
+  // 아래쪽 벽의 문을 꺾인 벽(오른쪽 벽 · 2,000~3,600)으로
+  await page.locator('#pbody [data-a=tab][data-k=tab][data-v=open]').click();
+  await page.locator('#pbody [data-a=pick][data-t=open]').first().click();
+  const opt = page.locator('[data-f="open.wall"] option', { hasText: '오른쪽 벽 · 2,000~3,600' });
+  await page.locator('[data-f="open.wall"]').selectOption(await opt.getAttribute('value'));
+  expect(await page.evaluate(() => { const o = app.proj.openings[0]; return [o.wall, o.at, o.pos >= 2000 && o.pos + o.w <= 3600]; })).toEqual(['E', 4200, true]);
+  // 조각을 지우면 사각형으로
+  await page.locator('#pbody [data-a=desel]').click();
+  await page.locator('#pbody [data-a=tab][data-k=tab][data-v=room]').click();
+  await page.locator('#pbody [data-a=pick][data-t=part]').nth(1).click();
+  await page.keyboard.press('Delete');
+  expect(await page.evaluate(() => [app.M.segs(app.proj.room).length, app.proj.room.w, app.proj.room.d, app.proj.room.parts.length, app.ui.sel])).toEqual([4, 4200, 3600, 1, null]);
+  await expect(page.locator('[data-f="room.w"]')).toBeVisible();
+});

@@ -383,3 +383,90 @@ test('밑그림: sanitize, 두 점 축척, 모서리 맞추기, 공유 링크에
   assert.ok(M.planSVG(q).includes(`<image href="${src}" x="-300" y="-200" width="8000" height="4000" opacity="0.6" preserveAspectRatio="none"/>`));
   assert.ok(!M.planSVG(p).includes('<image'));
 });
+
+// ㄱ자 방: 왼쪽 4200 × 3600에 오른쪽 위 2000 × 2000을 맞붙인다(오른쪽 아래 2000 × 1600이 방 밖)
+const L = (extra = {}) => M.sanitize({ room: { h: 2400, parts: [{ id: 'a', x: 0, z: 0, w: 4200, d: 3600 }, { id: 'b', x: 4200, z: 0, w: 2000, d: 2000 }] }, library: [{ id: 'box', name: '상자', kind: 'box', params: { W: 400, D: 400, H: 400 } }], ...extra });
+
+test('방 조각 sanitize: 없으면 w·d로 하나, 둘 이상이면 w·d가 감싸는 크기, 범위, 하나면 (0,0)·w/d 우선', () => {
+  const old = M.sanitize({ room: { w: 5000, d: 3200 } });
+  assert.deepEqual(old.room.parts, [{ id: 'r1', x: 0, z: 0, w: 5000, d: 3200 }]);
+  assert.deepEqual(M.sanitize({ room: { w: 5000, d: 3200 } }).room.parts, old.room.parts, '예전 저장본을 두 번 읽어도 같은 조각(mergeStore가 같은 방으로 본다)');
+  assert.deepEqual([L().room.w, L().room.d], [6200, 3600]);
+  const one = M.sanitize({ room: { w: 3000, d: 2500, parts: [{ id: 'q', x: 700, z: 900, w: 1000, d: 1000 }] } }).room;
+  assert.deepEqual([one.w, one.d, one.parts], [3000, 2500, [{ id: 'q', x: 0, z: 0, w: 3000, d: 2500 }]]);
+  const bad = M.sanitize({ room: { w: 100, parts: [{ x: -5, z: 'x', w: 10, d: 99999 }, null, { x: 40000, z: 0, w: 600, d: 600 }] } }).room;
+  assert.deepEqual(bad.parts.map(p => [p.x, p.z, p.w, p.d]), [[0, 0, 500, 30000], [30000, 0, 600, 600]]);
+  assert.deepEqual([bad.w, bad.d], [30600, 30000]);
+  assert.equal(M.sanitize({ room: { parts: Array.from({ length: 80 }, (_, i) => ({ x: i * 10, w: 600, d: 600 })) } }).room.parts.length, 50, '남이 준 링크의 조각 수를 막는다');
+  const p = L();
+  assert.deepEqual(M.sanitize(JSON.parse(JSON.stringify(p))), p, '다시 거쳐도 그대로');
+});
+
+test('ㄱ자 방: segs 6개(좌표까지), 이음매에는 벽이 없음, inside, cells, reach', () => {
+  const { room } = L();
+  assert.deepEqual(M.segs(room), [{ wall: 'N', at: 0, s0: 0, s1: 6200 }, { wall: 'S', at: 2000, s0: 4200, s1: 6200 }, { wall: 'S', at: 3600, s0: 0, s1: 4200 },
+    { wall: 'W', at: 0, s0: 0, s1: 3600 }, { wall: 'E', at: 4200, s0: 2000, s1: 3600 }, { wall: 'E', at: 6200, s0: 0, s1: 2000 }]);
+  assert.deepEqual(M.segs(M.sanitize({ room: { w: 4200, d: 3600 } }).room).map(s => [s.wall, s.at, s.s0, s.s1]), [['N', 0, 0, 4200], ['S', 3600, 0, 4200], ['W', 0, 0, 3600], ['E', 4200, 0, 3600]], '사각형');
+  const lap = M.sanitize({ room: { parts: [{ x: 0, z: 0, w: 3000, d: 3000 }, { x: 2000, z: 1000, w: 3000, d: 1000 }] } }).room; // 겹친 조각
+  assert.equal(M.segs(lap).length, 8);
+  assert.ok(!M.segs(lap).some(s => s.wall === 'E' && s.at === 3000 && s.s0 < 2000 && s.s1 > 1000), '겹친 곳 안에는 벽이 없다');
+  assert.ok(M.inside(room, 5000, 1000) && M.inside(room, 4200, 1000) && !M.inside(room, 5000, 3000));
+  const c = M.cells(room);
+  assert.deepEqual(c.out, [{ x: 4200, z: 2000, w: 2000, d: 1600 }]);
+  assert.equal(c.inn.reduce((s, r) => s + r.w * r.d, 0), 4200 * 3600 + 2000 * 2000, '안쪽 칸은 겹치지 않는다');
+  assert.deepEqual(M.reach(room, 1000, 1000), { x0: 0, x1: 6200, z0: 0, z1: 3600 }, '이음매 너머까지');
+  assert.deepEqual(M.reach(room, 1000, 3000), { x0: 0, x1: 4200, z0: 0, z1: 3600 });
+  assert.deepEqual(M.reach(room, 5000, 1000), { x0: 0, x1: 6200, z0: 0, z1: 2000 });
+  assert.deepEqual(M.reach(room, 5000, 3000), { x0: 0, x1: 6200, z0: 0, z1: 3600 }, '방 밖이면 감싸는 상자');
+});
+
+test('ㄱ자 방의 벽 상자: 방 안을 침범하지 않고 볼록 모서리를 채운다', () => {
+  const p = L({ openings: [{ type: 'door', wall: 'S', at: 2000, pos: 4800, w: 800 }] }), boxes = M.wallBoxes(p.room, p.openings).filter(b => b.kind === 'wall' || b.kind === 'top');
+  const inn = M.cells(p.room).inn, cut = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.z + a.d, b.z + b.d) - Math.max(a.z, b.z));
+  for (const b of boxes) assert.equal(inn.reduce((s, c) => s + cut(b, c), 0), 0, JSON.stringify(b));
+  const covered = (x, z) => boxes.some(b => b.x <= x && x <= b.x + b.w && b.z <= z && z <= b.z + b.d);
+  for (const [x, z] of [[-50, -50], [6250, -50], [6250, 2050], [-50, 3650], [4250, 3650], [4250, 2050]]) assert.ok(covered(x, z), `모서리 ${x},${z}`); // 볼록 5 + 오목 1
+  const area = boxes.reduce((s, b) => s + b.w * b.d * (b.kind === 'top' ? 0 : b.h === 2400 ? 1 : 0), 0) + 800 * M.WT; // 문 자리를 더하면 둘레 길이 × WT + 볼록 모서리 5칸
+  assert.equal(area, 19600 * M.WT + 5 * M.WT * M.WT, '볼록 모서리만 늘린다(오목 모서리에서 늘리면 한 칸 더)');
+});
+
+test('문·창문 붙기: 예전 형식은 바깥 벽, 꺾인 벽은 유지, 조각을 지우면 같은 방향의 가까운 벽으로', () => {
+  const p = L({ openings: [{ type: 'door', wall: 'S', pos: 1000, w: 900 }, { type: 'window', wall: 'E', pos: 500, w: 1000 }, { type: 'door', wall: 'E', at: 4200, pos: 2300, w: 900 }, { type: 'door', wall: 'S', at: 2000, pos: 99999, w: 99999 }] });
+  assert.deepEqual(p.openings.map(o => [o.wall, o.at, o.pos, o.w]), [['S', 3600, 1000, 900], ['E', 6200, 500, 1000], ['E', 4200, 2300, 900], ['S', 2000, 4200, 2000]]);
+  assert.deepEqual(M.sanitize(JSON.parse(JSON.stringify(p))).openings, p.openings, '안쪽으로 꺾인 벽에 붙인 것은 그대로');
+  const z = M.doorZone(p.openings[2]); // 꺾인 벽(x = 4200, 방은 왼쪽)의 문: 부채꼴이 방 안쪽(−x)으로
+  assert.ok(z.every(([x]) => x <= 4200 + 1e-9) && Math.min(...z.map(v => v[0])) < 3400 && z.every(([x, v]) => M.inside(p.room, x, v)));
+  const gone = M.sanitize({ ...JSON.parse(JSON.stringify(p)), room: { ...p.room, w: 4200, d: 3600, parts: [p.room.parts[0]] } }); // 오른쪽 조각을 지움(app처럼 남은 조각 치수를 w·d로)
+  assert.deepEqual(gone.openings.map(o => [o.wall, o.at, o.pos, o.w]), [['S', 3600, 1000, 900], ['E', 4200, 500, 1000], ['E', 4200, 2300, 900], ['S', 3600, 2200, 2000]]);
+  assert.ok(gone.openings.every(o => M.segs(gone.room).some(s => M.onSeg(s, o))), '모두 벽 구간 안');
+  const tiny = M.sanitize({ room: { parts: [{ x: 0, z: 0, w: 3000, d: 3000 }, { x: 3000, z: 0, w: 500, d: 2800 }] }, openings: [{ type: 'door', wall: 'E', pos: 2850, w: 900 }] }); // 200mm 벽(x = 3000, z 2800~3000)은 피한다
+  assert.deepEqual([tiny.openings[0].at, tiny.openings[0].pos], [3500, 1900]);
+});
+
+test('ㄱ자 방의 판정: 방 밖 칸은 벽 밖, 이음매에 걸친 가구는 통과, 오목 모서리를 넘으면 벽 밖, 열림 막힘', () => {
+  const at = (x, z, rot = 0) => { const p = L({ items: [{ id: 'i', def: 'box', x, z, rot }] }); return M.conflicts(p).items.get('i') ?? null; };
+  assert.equal(at(5000, 3000), '벽 밖', '감싸는 상자 안이지만 방 밖');
+  assert.equal(at(4200, 1000), null, '맞붙은 조각의 이음매');
+  assert.equal(at(4000, 1700), null, '오목 모서리 안쪽 끝까지는 방 안');
+  assert.equal(at(4100, 2100), '벽 밖', '오목 모서리를 넘어 방 밖으로 삐져나옴');
+  assert.equal(at(3950, 1850, 45), null, '45° 돌린 상자: 축 정렬 범위는 바깥 칸에 닿지만 실제 모양은 방 안');
+  const lib = [{ id: 'dr', name: '서랍장', kind: 'drawers' }], dr = x => { const p = M.sanitize({ room: L().room, library: lib, items: [{ id: 'd', def: 'dr', x, z: 1500, rot: 0 }] }); return M.openZones(p, p.items[0]).some(z => z.blocked); };
+  assert.equal(dr(2000), false);
+  assert.equal(dr(5200), true, '서랍이 방 밖 칸으로 나온다');
+});
+
+test('ㄱ자 방의 평면도·DAE, 저장본·공유 링크 왕복에서 parts·at 유지', async () => {
+  const p = L({ openings: [{ type: 'door', wall: 'E', at: 4200, pos: 2300, w: 900 }], items: [{ def: 'box', x: 1000, z: 1000 }] }), svg = M.planSVG(p);
+  assert.ok(!/NaN|Infinity|undefined/.test(svg));
+  assert.equal(svg.split(`fill="${p.room.floor}"`).length - 1, p.room.parts.length, '바닥은 조각마다');
+  const nums = [...svg.matchAll(/>(\d+)<\/text>/g)].map(m => +m[1]);
+  for (const v of [6200, 3600, 300, 900, 400]) assert.ok(nums.includes(v), String(v)); // 전체 가로·세로, 꺾인 벽(2000~3600)의 모서리→문→모서리
+  assert.equal(M.exportNodes(p)[0].boxes.filter(b => b.name === '바닥').length, M.cells(p.room).inn.length);
+  const s = { cur: p.id, library: p.library, projects: [p], cut: M.cutOpts() }, back = M.readStore(JSON.parse(M.dumpStore(s))).projects[0];
+  assert.deepEqual([back.room, back.openings], [p.room, p.openings]);
+  const r = await M.decodeShare(await M.encodeShare(p));
+  assert.deepEqual([r.room, r.openings], [p.room, p.openings]);
+  const e = example(), v3 = JSON.parse(JSON.stringify(e)); delete v3.room.parts; v3.openings.forEach(o => delete o.at);
+  const old = M.readStore({ v: 3, projects: [v3] }).projects[0];
+  assert.deepEqual([old.room, old.openings], [e.room, e.openings], 'v 3 사각형 방은 그대로(조각 r1, 문은 바깥 벽)');
+});

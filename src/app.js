@@ -32,7 +32,7 @@ if (locked) window.fmBar?.('지금은 저장되지 않습니다', '이 저장본
 const shareHash = location.hash.startsWith('#room='), shared = shareHash ? await M.decodeShare(location.hash.slice(6)) : null;
 let viewing = shared?.room ? shared : null;
 let proj = viewing || store.projects.find(p => p.id === store.cur) || store.projects[0];
-const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체', pick: null }; // q: 가구 검색어, cat: 가구 탭의 분류, pick: 밑그림 점 찍기 { kind: 'scale' | 'origin', pts }
+const ui = { mode: 'room', view: '3d', tab: 'add', dtab: 'edit', sel: null, defId: null, partId: null, q: '', cat: '전체', pick: null, walk: false }; // q: 가구 검색어, cat: 가구 탭의 분류, pick: 밑그림 점 찍기 { kind: 'scale' | 'origin', pts }, walk: 통로 보기(저장하지 않음)
 const hist = { undo: [], redo: [] };
 let bad = { items: new Map(), doors: new Set() };
 
@@ -88,12 +88,13 @@ const gizmo = new TransformControls(camera, canvas); gizmo.setRotationSnap(5 * M
 const BOX = new THREE.BoxGeometry(1, 1, 1), EDGE = new THREE.EdgesGeometry(BOX), mats = {};
 const mat = c => (mats[c] ||= new THREE.MeshLambertMaterial({ color: c, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
 const GLASS = new THREE.MeshLambertMaterial({ color: 0x9fd0ea, transparent: true, opacity: .45 });
+const WALK = new THREE.MeshBasicMaterial({ color: 0xe03b3b, transparent: true, opacity: .4, depthWrite: false, side: THREE.DoubleSide }); // 통로 보기: 닿지 않는 바닥
 const line = (color, o) => new THREE.LineBasicMaterial({ color, ...o });
 const FLAT = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // 밑그림 판: 그림 위쪽이 −z(평면도 위)
 let bgTex = null, bgSrc = ''; // 밑그림 텍스처는 src 하나만 캐시(장면을 다시 만들 때마다 디코드하지 않게)
 const L = { edge: line(0x1b222a, { transparent: true, opacity: .4 }), door: line(0x5d6976), sel: line(0x2f7df6, { depthTest: false }), dim: line(0xb86e00, { depthTest: false }), bad: line(0xc42f2f, { depthTest: false }), none: line(0, { visible: false }) };
 
-let pick = [], labels = [], dimPts = [], tmp = [];
+let pick = [], labels = [], dimPts = [], tmp = [], walked = null, walkFor = null; // walked: 통로 보기 결과(walkFor 방 객체 기준. 끄는 동안은 같은 객체라 다시 계산하지 않는다)
 function outline(b, m) { // b = {x,y,z,w,h,d} 최소 모서리 기준
   const l = new THREE.LineSegments(EDGE, m); l.scale.set(b.w, b.h, b.d); l.position.set(b.x + b.w / 2, b.y + b.h / 2, b.z + b.d / 2);
   if (m !== L.edge) l.renderOrder = 9; // 선택·경고 선은 맨 위에
@@ -122,6 +123,10 @@ function buildRoom() {
     if (bgSrc !== g.src) { bgTex?.dispose(); bgSrc = g.src; bgTex = new THREE.TextureLoader().load(g.src, invalidate); bgTex.colorSpace = THREE.SRGBColorSpace; }
     const m = new THREE.Mesh(FLAT, new THREE.MeshBasicMaterial({ map: bgTex, transparent: true, opacity: g.op, depthWrite: false }));
     m.scale.set(g.w, 1, h); m.position.set(g.x + g.w / 2, 2, g.z + h / 2); tmp.push(m.material); world.add(m);
+  }
+  if (ui.walk) { // 밑그림 위·가구 아래. 방이 바뀔 때(refresh = 새 객체)만 계산한다
+    if (walkFor !== proj) { walked = M.walk(proj); walkFor = proj; }
+    if (walked.none.length) world.add(new THREE.Mesh(geom(walked.none.flatMap(r => { const a = [r.x, 3, r.z], b = [r.x + r.w, 3, r.z], c = [r.x + r.w, 3, r.z + r.d], d = [r.x, 3, r.z + r.d]; return [...a, ...b, ...c, ...a, ...c, ...d]; })), WALK));
   }
   if (ui.pick?.pts.length) { const [x, z] = ui.pick.pts[0]; dimPts.push(x - 150, 5, z, x + 150, 5, z, x, 5, z - 150, x, 5, z + 150); } // 찍은 첫째 점
   for (const b of M.wallBoxes(room, proj.openings, proj.blocks, proj.walls)) { const m = box(b, b.kind === 'glass' ? GLASS : room.wall); m.userData = { wall: b.wall, top: b.kind === 'top' }; world.add(m); if (b.id && b.id === (b.kind === 'block' ? selBlock() : selWall())?.id) world.add(outline(b, L.sel)); } // 기둥(block)·안쪽 벽은 wall이 없어 늘 보인다. 고른 것은 조각마다 테두리
@@ -168,7 +173,9 @@ function rebuild() {
   [...box.children].forEach((el, i) => { el.hidden = !labels[i]; if (labels[i]) { el.textContent = labels[i].text; el.className = labels[i].cls; } });
   const n = ui.mode === 'room' ? bad.items.size : 0;
   const pk = ui.pick && (ui.pick.kind === 'origin' ? '그림 속 방의 왼쪽 위 모서리를 찍으세요' : ui.pick.pts.length ? '둘째 점을 찍으세요' : '첫째 점을 찍으세요');
-  $('#hud').innerHTML = pk ? `<span class="chip pick">${pk}</span> <button class="btn" data-a="desel">취소</button>` : n ? `<span class="chip bad">겹침·막힘 ${n}</span>`
+  const w = ui.walk && walked, wk = w && (w.area ? `<span class="chip warn">닿지 않는 바닥 ${Math.max(.1, w.area).toFixed(1)} m²</span>` : `<span class="chip ok">${w.doors ? '통로 막힘 없음' : '문이 없어 통로를 볼 수 없습니다'}</span>`);
+  $('#hud').innerHTML = pk ? `<span class="chip pick">${pk}</span> <button class="btn" data-a="desel">취소</button>`
+    : ui.mode === 'room' ? `${n ? `<span class="chip bad">겹침·막힘 ${n}</span> ` : ''}<div class="seg"><button data-a="walk" aria-pressed="${ui.walk}" title="문에서 사람 폭 600mm로 걸어서 닿지 않는 바닥을 칠합니다"${ui.walk ? ' class="on"' : ''}>통로 보기</button></div>${wk ? ' ' + wk : ''}`
     : gizmo.object ? `<div class="seg">${[['translate', '이동'], ['rotate', '회전']].map(([v, t]) => `<button data-a="gmode" data-v="${v}"${v === gizmo.mode ? ' class="on"' : ''}>${t}</button>`).join('')}</div>` : ''; // 고른 부품을 끌 때: 화살표(이동) / 고리(회전)
   world.updateMatrixWorld(true); // 다음 프레임을 그리기 전에 눌러도 새 물체가 잡히게
   invalidate();
@@ -496,6 +503,7 @@ const ACT = {
   mode: d => go(d.v, d.id),
   view: d => { ui.view = d.v; setView(); renderPanel(); },
   tab: d => { ui[d.k] = d.v; renderPanel(); },
+  walk: () => { ui.walk = !ui.walk; rebuild(); }, // 화면 상태만(commit 아님): 공유받은 방 보기에서도 된다
   fit, undo: () => travel(hist.undo, hist.redo), redo: () => travel(hist.redo, hist.undo),
   fold: () => document.body.classList.toggle('folded'),
   set: d => apply(d.f, d.v),

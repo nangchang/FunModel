@@ -53,6 +53,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; paddin
 #hud { position: absolute; left: 10px; top: 10px; pointer-events: none; }
 #hud :is(.seg, .btn) { pointer-events: auto; }
 .chip.pick { background: var(--accent-soft); color: var(--ink); border: 1px solid var(--accent); } /* 밑그림 점 찍기 안내 */
+.chip.warn { background: var(--surface); color: var(--dim); border: 1px solid var(--dim); } .chip.ok { background: var(--surface); border: 1px solid var(--line); } /* 통로 보기 결과 */
 #fit { position: absolute; right: 10px; top: 10px; }
 .chip, .pill { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
 .bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }

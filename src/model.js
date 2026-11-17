@@ -291,6 +291,42 @@ export function openZones(proj, it) {
     return { poly, y0, y1, blocked };
   });
 }
+// 통로 보기: 둘레 벽의 문에서 사람(폭 600 → 반경 300)이 걸어서 닿지 않는 바닥 → { none: [{ x, z, w, d }](줄마다 이어 붙인 칸), area(m²), doors(둘레 벽의 문 수), starts(시작점이 된 문 수) }
+// 막힌 칸: 방 밖·격자 밖, 기둥·안쪽 벽(문 자리는 뚫림), 머리 높이(1800) 아래에 걸친 가구 부품의 바닥 그림자(러그는 뺀다). 둘레 벽에 문이 없으면 칠하지 않는다
+// shortcut: 50mm 칸 중심으로 보고 사람을 원이 아니라 정사각형으로 본다(±25mm, 50mm보다 가는 부품 하나만 있으면 놓칠 수 있다), 틀린 판정이 보고되면 칸을 줄이거나 원으로 부풀린다
+export function walk(proj) {
+  const { room } = proj, G = 50, R = 5 /* 중심이 300mm 안인 칸 */, nx = Math.ceil(room.w / G), nz = Math.ceil(room.d / G), N = nx * nz, cs = v => Math.ceil(v / G - .5), ce = v => Math.floor(v / G - .5); // 중심이 v 이상인 첫 칸, v 이하인 끝 칸
+  const doors = proj.openings.filter(o => o.type === 'door' && segs(room).some(s => onSeg(s, o)));
+  if (!doors.length) return { none: [], area: 0, doors: 0, starts: 0 };
+  const bad = new Uint8Array(N).fill(1);
+  for (const r of cells(room).inn) for (let j = Math.max(0, cs(r.z)); j <= Math.min(nz - 1, ce(r.z + r.d)); j++) for (let i = Math.max(0, cs(r.x)); i <= Math.min(nx - 1, ce(r.x + r.w)); i++) bad[j * nx + i] = 0;
+  const parts = [...proj.items.map(it => shape(proj, it)).filter(s => !s.low), ...fixed(proj)].flatMap(s => s.parts).filter(p => p.y0 < 1800);
+  for (const p of parts) { // 바닥 그림자(볼록)에 중심이 드는 칸. 감은 방향에 상관없이 모든 변의 같은 쪽이면 안
+    const f = foot(p), inPoly = (x, z) => { let s = 0; for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length], t = Math.sign((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0])); if (t && s && t !== s) return false; s ||= t; } return true; };
+    for (let j = Math.max(0, cs(p.c[2] - p.e[2])); j <= Math.min(nz - 1, ce(p.c[2] + p.e[2])); j++) for (let i = Math.max(0, cs(p.c[0] - p.e[0])); i <= Math.min(nx - 1, ce(p.c[0] + p.e[0])); i++) if (inPoly((i + .5) * G, (j + .5) * G)) bad[j * nx + i] = 1;
+  }
+  const grow = (a, edge) => { // 정사각형(2R+1칸)으로 부풀리기: 가로로 한 번, 세로로 한 번. edge = 격자 밖을 막힌 칸으로 볼지
+    const pass = (src, n, m, ix) => { const out = new Uint8Array(N), s = new Int32Array(n + 1);
+      for (let j = 0; j < m; j++) { for (let k = 0; k < n; k++) s[k + 1] = s[k] + src[ix(k, j)]; for (let k = 0; k < n; k++) out[ix(k, j)] = (edge && (k < R || k + R >= n)) || s[Math.min(n, k + R + 1)] > s[Math.max(0, k - R)] ? 1 : 0; }
+      return out; };
+    return pass(pass(a, nx, nz, (k, j) => j * nx + k), nz, nx, (k, i) => k * nx + i);
+  };
+  const near = grow(bad, true), seen = new Uint8Array(N), stack = new Int32Array(N);
+  let top = 0, starts = 0;
+  for (const o of doors) { // 문 가운데에서 방 안쪽으로 300mm. 거기 설 수 없으면(문 앞을 가구가 막음) 시작점이 못 된다
+    const [x, z] = at(FRAMES[o.wall](o), o.pos + o.w / 2, 300), i = Math.floor(x / G), j = Math.floor(z / G), k = j * nx + i;
+    if (i < 0 || j < 0 || i >= nx || j >= nz || near[k]) continue;
+    starts++; if (!seen[k]) { seen[k] = 1; stack[top++] = k; }
+  }
+  while (top) { const k = stack[--top], i = k % nx; for (const q of [i > 0 && k - 1, i < nx - 1 && k + 1, k - nx, k + nx]) if (q !== false && q >= 0 && q < N && !near[q] && !seen[q]) { seen[q] = 1; stack[top++] = q; } }
+  const body = grow(seen, false), none = [];
+  for (let j = 0; j < nz; j++) for (let i = 0; i < nx;) {
+    if (bad[j * nx + i] || body[j * nx + i]) { i++; continue; }
+    const k = i; while (i < nx && !bad[j * nx + i] && !body[j * nx + i]) i++;
+    none.push({ x: k * G, z: j * G, w: Math.min(i * G, room.w) - k * G, d: Math.min((j + 1) * G, room.d) - j * G });
+  }
+  return { none, area: none.reduce((s, r) => s + r.w * r.d, 0) / 1e6, doors: doors.length, starts };
+}
 
 /* ---------- 재단 목록 ---------- */
 export function cutList(parts) { // 세 치수를 큰 순으로 길이·폭·두께로 보고, 같은 것끼리 묶는다

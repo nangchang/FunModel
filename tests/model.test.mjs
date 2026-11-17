@@ -537,3 +537,54 @@ test('안쪽 벽의 평면도·DAE, 저장본·공유 링크 왕복에서 walls 
   const r = await M.decodeShare(await M.encodeShare(p));
   assert.deepEqual([r.walls, r.openings], [p.walls, p.openings]);
 });
+
+// 통로 보기: 4200 × 3600 방, 아래쪽 벽에 문
+const hall = (extra = {}) => M.sanitize({ room: { w: 4200, d: 3600, h: 2400 }, openings: [{ type: 'door', wall: 'S', pos: 1000, w: 900 }],
+  library: [{ id: 'long', name: '긴 장', kind: 'box', params: { W: 3000, D: 400, H: 900 } }, { id: 'bar', name: '가로막', kind: 'box', params: { W: 4200, D: 600, H: 300 } }, { id: 'rug', name: '러그', kind: 'box', params: { W: 4200, D: 600, H: 10 } }], ...extra });
+const area = p => M.walk(p).area;
+
+test('통로 보기: 문 하나인 빈 방은 다 닿고, 벽과 400mm 틈의 긴 가구 뒤는 안 닿고 700mm면 닿는다', () => {
+  assert.deepEqual(M.walk(hall()), { none: [], area: 0, doors: 1, starts: 1 });
+  assert.deepEqual(M.walk(hall({ openings: [{ type: 'door', wall: 'N', pos: 300, w: 800 }, { type: 'door', wall: 'E', pos: 2000, w: 800 }] })), { none: [], area: 0, doors: 2, starts: 2 }, '위쪽·오른쪽 벽의 문');
+  const w = M.walk(hall({ items: [{ def: 'long', x: 2100, z: 600 }] })); // 뒤쪽 모서리가 z = 400
+  assert.ok(w.area > 1 && w.none.every(r => r.z + r.d <= 400), JSON.stringify(w.none.slice(0, 3)));
+  assert.equal(area(hall({ items: [{ def: 'long', x: 2100, z: 900 }] })), 0, '틈 700');
+});
+
+test('통로 보기: 러그와 1800 이상에 건 것은 막지 않고, 1700에 건 것과 기둥은 막는다', () => {
+  const at = (def, y) => area(hall({ items: [{ def, x: 2100, z: 1500, y }] }));
+  assert.equal(at('rug', 0), 0);
+  assert.equal(at('bar', 1800), 0);
+  assert.ok(Math.abs(at('bar', 1700) - 4.2 * 1.2) < .01, String(at('bar', 1700))); // 가로막 위쪽(z < 1200)
+  assert.ok(Math.abs(area(hall({ blocks: [{ x: 0, z: 1200, w: 4200, d: 600 }] })) - 4.2 * 1.2) < .01, '기둥');
+});
+
+test('통로 보기: 안쪽 벽 너머는 문이 900이면 닿고 500이면 못 지나간다, ㄱ자 방은 꺾인 쪽까지', () => {
+  const room = door => M.walk(split({ openings: [{ type: 'door', wall: 'S', pos: 500, w: 900 }, ...(door ? [{ type: 'door', wall: 'W', at: 2100, ...door }] : [])] }));
+  const shut = room();
+  assert.ok(Math.abs(shut.area - 2.05 * 3.6) < .01 && shut.none.every(r => r.x >= 2150), String(shut.area)); // 벽 오른쪽 전체
+  assert.equal(room({ pos: 1000, w: 900 }).area, 0);
+  assert.equal(room({ pos: 1010, w: 600 }).area, 0, '600이면 칸에 안 맞아도 지나간다');
+  assert.ok(room({ pos: 1010, w: 500 }).area >= shut.area, '500은 못 지나간다(문 자리 바닥도 안 닿음)');
+  assert.equal(room({ pos: 1000, w: 900 }).starts, 1, '안쪽 벽의 문은 시작점이 아니다');
+  assert.deepEqual(M.walk(L({ openings: [{ type: 'door', wall: 'S', at: 3600, pos: 1000, w: 900 }] })), { none: [], area: 0, doors: 1, starts: 1 });
+});
+
+test('통로 보기: 둘레 벽에 문이 없으면 칠하지 않고, 문 앞을 막으면 시작 못 해 방 전체가 안 닿는다', () => {
+  assert.deepEqual(M.walk(hall({ openings: [{ type: 'window', wall: 'W', pos: 600, w: 1400 }] })), { none: [], area: 0, doors: 0, starts: 0 });
+  assert.equal(M.walk(split({ openings: [{ type: 'door', wall: 'W', at: 2100, pos: 1000, w: 900 }] })).doors, 0, '안쪽 벽의 문뿐');
+  const w = M.walk(hall({ items: [{ def: 'long', x: 1500, z: 3400 }] })); // 문 앞에 붙인 긴 장
+  assert.deepEqual([w.doors, w.starts], [1, 0]);
+  assert.ok(Math.abs(w.area - (4.2 * 3.6 - 3 * .4)) < .01, String(w.area));
+});
+
+test('통로 보기: 돌린 가구, 넓이 = 사각형 넓이 합, 10m 방 시간', () => {
+  const p = example(); itemOf(p, '퀸 침대').rot = 30;
+  const w = M.walk(M.sanitize(p));
+  assert.ok(Number.isFinite(w.area) && w.none.every(r => [r.x, r.z, r.w, r.d].every(Number.isFinite) && r.w > 0 && r.d > 0));
+  assert.ok(Math.abs(w.area - w.none.reduce((s, r) => s + r.w * r.d, 0) / 1e6) < 1e-9);
+  const big = M.sanitize({ ...example(), room: { w: 10000, d: 10000, h: 2400 } });
+  big.items = Array.from({ length: 10 }, (_, i) => ({ ...big.items[i % big.items.length], id: 'i' + i, x: 800 + i * 900, z: 1500 + (i % 3) * 3000, rot: i * 20 }));
+  const t = performance.now(); M.walk(big);
+  assert.ok(performance.now() - t < 500, String(performance.now() - t));
+});

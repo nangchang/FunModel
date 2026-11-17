@@ -300,3 +300,20 @@ test('안쪽 벽: 넣으면 방을 나누고 걸친 가구는 경고, 문을 안
   expect(await page.evaluate(() => [app.proj.walls.length, app.ui.sel])).toEqual([0, null]);
   expect(await door()).toEqual([3, 'W', 0]);
 });
+
+test('통로 보기: 켜면 HUD에 결과, 문 앞을 가구로 막으면 닿지 않는 바닥이 커지고, 끄면 사라진다', async ({ page }) => {
+  await example(page);
+  const btn = page.locator('#hud [data-a=walk]'), chip = page.locator('#hud .chip.warn, #hud .chip.ok');
+  await expect(chip).toHaveCount(0);
+  await btn.click();
+  await expect(btn).toHaveClass(/on/);
+  await expect(chip).toContainText(/닿지 않는 바닥|통로 막힘 없음/); // 예시 방은 침대 왼쪽 틈이 막혀 있다
+  const before = await page.evaluate(() => app.M.walk(app.proj).area);
+  await page.locator('#pbody .card', { hasText: '퀸 침대' }).locator('[data-a=add]').click();
+  for (const [f, v] of [['item.left', '1000'], ['item.top', '1500']]) { await page.locator(`[data-f="${f}"]`).fill(v); await page.locator(`[data-f="${f}"]`).press('Tab'); await frame(page); } // 아래쪽 벽 문(1000~1900) 바로 앞
+  await expect(chip).toContainText('닿지 않는 바닥');
+  expect(await page.evaluate(b => { const w = app.M.walk(app.proj); return [w.starts, w.area > b + 3]; }, before)).toEqual([0, true]); // 시작 못 함 → 남은 바닥 전체
+  await btn.click();
+  await expect(chip).toHaveCount(0);
+  await expect(btn).not.toHaveClass(/on/);
+});

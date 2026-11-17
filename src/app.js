@@ -40,6 +40,7 @@ const curDef = () => proj.library.find(d => d.id === ui.defId);
 const selItem = () => (ui.sel?.type === 'item' ? proj.items.find(i => i.id === ui.sel.id) : null);
 const selOpen = () => (ui.sel?.type === 'open' ? proj.openings.find(o => o.id === ui.sel.id) : null);
 const selBlock = () => (ui.sel?.type === 'block' ? proj.blocks.find(b => b.id === ui.sel.id) : null);
+const selWall = () => (ui.sel?.type === 'wall' ? proj.walls.find(w => w.id === ui.sel.id) : null); // 안쪽 벽
 const selPiece = () => (ui.sel?.type === 'part' && proj.room.parts.length > 1 ? proj.room.parts.find(p => p.id === ui.sel.id) : null); // 방 조각. 하나뿐이면 늘 (0,0)·방 치수라 고를 것이 없다
 const selPart = () => { const d = curDef(); return d?.kind === 'custom' ? d.parts.find(p => p.id === ui.partId) : null; };
 
@@ -50,7 +51,7 @@ function commit(fn) { if (viewing) return; snap(); fn(); refresh(); }
 function travel(from, to) { if (!from.length || viewing) return; to.push(JSON.stringify(proj)); setProj(JSON.parse(from.pop())); refresh(); }
 function refresh() { // 모든 변경 뒤: 값 범위를 다시 맞추고(sanitize) 장면·패널·저장을 갱신
   setProj(M.sanitize(proj));
-  if (ui.sel && !selItem() && !selOpen() && !selBlock() && !selPiece()) ui.sel = null;
+  if (ui.sel && !selItem() && !selOpen() && !selBlock() && !selPiece() && !selWall()) ui.sel = null;
   if (!proj.bg) ui.pick = null;
   rebuild(); renderPanel(); save();
 }
@@ -123,14 +124,14 @@ function buildRoom() {
     m.scale.set(g.w, 1, h); m.position.set(g.x + g.w / 2, 2, g.z + h / 2); tmp.push(m.material); world.add(m);
   }
   if (ui.pick?.pts.length) { const [x, z] = ui.pick.pts[0]; dimPts.push(x - 150, 5, z, x + 150, 5, z, x, 5, z - 150, x, 5, z + 150); } // 찍은 첫째 점
-  for (const b of M.wallBoxes(room, proj.openings, proj.blocks)) { const m = box(b, b.kind === 'glass' ? GLASS : room.wall); m.userData = { wall: b.wall, top: b.kind === 'top' }; world.add(m); if (b.kind === 'block' && b.id === selBlock()?.id) world.add(outline(b, L.sel)); } // 기둥(block)은 wall이 없어 늘 보인다
+  for (const b of M.wallBoxes(room, proj.openings, proj.blocks, proj.walls)) { const m = box(b, b.kind === 'glass' ? GLASS : room.wall); m.userData = { wall: b.wall, top: b.kind === 'top' }; world.add(m); if (b.id && b.id === (b.kind === 'block' ? selBlock() : selWall())?.id) world.add(outline(b, L.sel)); } // 기둥(block)·안쪽 벽은 wall이 없어 늘 보인다. 고른 것은 조각마다 테두리
   for (const o of proj.openings) {
     const on = ui.sel?.id === o.id;
     if (o.type === 'door') { // 바닥에 문 열림 궤적
       const l = new THREE.LineLoop(geom(M.doorZone(o).flatMap(([x, z]) => [x, 4, z])), bad.doors.has(o.id) ? L.bad : on ? L.sel : L.door);
       l.renderOrder = 9; world.add(l);
     }
-    if (on) world.add(outline(M.spanBox(o, o.pos, o.pos + o.w, -M.WT, 0, o.sill, o.sill + o.h), L.sel));
+    if (on) { const [sg, i] = segOf(o), t = sg[i]?.inner ? M.WT / 2 : 0; world.add(outline(M.spanBox(o, o.pos, o.pos + o.w, t - M.WT, t, o.sill, o.sill + o.h), L.sel)); } // 안쪽 벽은 선 양쪽으로 반씩
   }
   for (const it of proj.items) {
     const d = M.defOf(proj, it), parts = M.partsOf(d), b = M.bounds(parts), g = new THREE.Group(), on = ui.sel?.id === it.id, why = bad.items.get(it.id);
@@ -141,7 +142,7 @@ function buildRoom() {
     if (ui.view === 'plan') labels.push({ v: new THREE.Vector3(it.x, it.y + b.y1, it.z), text: d.name, cls: 'name' });
     if (on) { // 선택한 가구에서 네 벽까지 거리, 문·서랍을 여는 데 드는 바닥(막히면 빨강)
       for (const z of M.openZones(proj, it)) { const l = new THREE.LineLoop(geom(z.poly.flatMap(([x, v]) => [x, 4, v])), z.blocked ? L.bad : L.door); l.renderOrder = 9; world.add(l); }
-      const s = M.shape(proj, it), y = 5, r = M.reach(room, it.x, it.z); // 가구 중심을 지나는 가로·세로 선이 닿는 벽까지
+      const s = M.shape(proj, it), y = 5, r = M.reach(room, it.x, it.z, proj.walls); // 가구 중심을 지나는 가로·세로 선이 닿는 벽까지
       dim([r.x0, y, it.z], [s.minx, y, it.z]); dim([s.maxx, y, it.z], [r.x1, y, it.z]); dim([it.x, y, r.z0], [it.x, y, s.minz]); dim([it.x, y, s.maxz], [it.x, y, r.z1]);
     }
   }
@@ -180,7 +181,7 @@ function render() {
   dirty = false;
   const plan = ui.view === 'plan', r = proj.room, c = camera.position, w = stage.clientWidth, h = stage.clientHeight;
   const inside = { N: c.z > 0, S: c.z < r.d, W: c.x > 0, E: c.x < r.w }; // 카메라 쪽 벽은 숨겨 안이 보이게
-  for (const m of world.children) if (m.userData.wall) m.visible = plan ? !m.userData.top : inside[m.userData.wall];
+  for (const m of world.children) if (m.userData.wall || m.userData.top) m.visible = plan ? !m.userData.top : !m.userData.wall || inside[m.userData.wall]; // 안쪽 벽(wall 없음)은 3D에서 늘 보이고 평면에서는 문 위 조각만 숨긴다
   renderer.render(scene, camera);
   labels.forEach((l, i) => {
     const el = $('#labels').children[i]; v3.copy(l.v).project(camera);
@@ -238,7 +239,7 @@ function hitTest(e) {
 }
 function place(it, x, z) { // 벽·다른 가구·기둥 가장자리가 40mm 안이면 거기에 붙이고, 아니면 격자에 맞춘다
   const s = M.shape(proj, it), g = proj.room.snap || 1;
-  const others = proj.items.filter(o => o !== it).map(o => M.shape(proj, o)), sg = M.segs(proj.room), wx = sg.filter(s => 'WE'.includes(s.wall)).map(s => s.at), wz = sg.filter(s => 'NS'.includes(s.wall)).map(s => s.at); // 모든 벽 선
+  const others = proj.items.filter(o => o !== it).map(o => M.shape(proj, o)), sg = M.segs(proj.room, proj.walls), face = s => s.at + (s.inner ? ('NW'.includes(s.wall) ? M.WT : -M.WT) / 2 : 0), wx = sg.filter(s => 'WE'.includes(s.wall)).map(face), wz = sg.filter(s => 'NS'.includes(s.wall)).map(face); // 모든 벽 면(안쪽 벽은 선 ± WT/2)
   const fix = (c, lo, hi, edges) => { // lo·hi: 중심에서 양쪽 가장자리까지. 비스듬히 놓은 가구는 둘이 다를 수 있다
     let best = 40, out = Math.round((c - lo) / g) * g + lo; // 붙을 데가 없으면 왼쪽·위쪽 끝을 격자에
     for (const e of edges) for (const v of [e + lo, e - hi]) if (Math.abs(v - c) < best) { best = Math.abs(v - c); out = v; } // 자석이 격자보다 먼저: 격자에 걸려 오른쪽·아래쪽 벽을 놓치지 않게
@@ -316,8 +317,9 @@ gizmo.addEventListener('mouseUp', () => { if (gz === 2) refresh(); });
 
 /* ---------- 패널 ---------- */
 const WALLS = { N: '위쪽 벽', S: '아래쪽 벽', W: '왼쪽 벽', E: '오른쪽 벽' };
-const wallName = (sg, s) => WALLS[s.wall] + (sg.filter(x => x.wall === s.wall).length > 1 ? ` · ${fmt(s.s0)}~${fmt(s.s1)}` : ''); // 같은 방향 벽이 여럿이면 구간을 붙인다
-const segOf = o => { const sg = M.segs(proj.room); return [sg, sg.findIndex(s => M.onSeg(s, o))]; };
+const FACES = { N: '아래쪽으로', S: '위쪽으로', W: '오른쪽으로', E: '왼쪽으로' }; // 안쪽 벽의 면: 문이 열리는 쪽·창이 보는 쪽
+const wallName = (sg, s) => s.inner ? `안쪽 벽 ${proj.walls.findIndex(w => w.id === s.inner) + 1} · ${FACES[s.wall]}` : WALLS[s.wall] + (sg.filter(x => x.wall === s.wall && !x.inner).length > 1 ? ` · ${fmt(s.s0)}~${fmt(s.s1)}` : ''); // 같은 방향 둘레 벽이 여럿이면 구간을 붙인다
+const segOf = o => { const sg = M.segs(proj.room, proj.walls); return [sg, sg.findIndex(s => M.onSeg(s, o))]; };
 const fld = (label, f, v, unit = 'mm', min = 0) => `<label class="fld"><span>${label}</span><input type="number" inputmode="numeric" data-f="${f}" value="${v}" min="${min}"><em>${unit}</em></label>`;
 const text = (label, f, v) => `<label class="fld"><span>${label}</span><input type="text" data-f="${f}" value="${esc(v)}" maxlength="60"></label>`;
 const sel = (label, f, v, opts) => `<label class="fld"><span>${label}</span><select data-f="${f}">${opts.map(([k, t]) => `<option value="${esc(k)}"${k === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
@@ -335,7 +337,7 @@ function filterQ() {
   body.querySelectorAll('.grp').forEach(g => { g.hidden = !g.querySelector('[data-n]:not([hidden])'); }); // 비게 된 분류 소제목도 숨긴다
 }
 function roomPanel() {
-  const it = selItem(), o = selOpen(), bl = selBlock(), pc = selPiece(), { room } = proj;
+  const it = selItem(), o = selOpen(), bl = selBlock(), pc = selPiece(), wl = selWall(), { room } = proj;
   if (it) {
     const d = M.defOf(proj, it), s = M.shape(proj, it);
     return `${head(d.name, size(s.b) + ' mm', bad.items.get(it.id) || (M.openZones(proj, it).some(z => z.blocked) && '열림 막힘'))}
@@ -353,10 +355,13 @@ function roomPanel() {
   if (pc) return `${head(`조각 ${room.parts.indexOf(pc) + 1}`, `${fmt(pc.w)} × ${fmt(pc.d)} mm`)}
       <div class="grid">${fld('왼쪽에서', 'piece.x', pc.x)}${fld('위에서', 'piece.z', pc.z)}${fld('가로', 'piece.w', pc.w, 'mm', 500)}${fld('세로', 'piece.d', pc.d, 'mm', 500)}</div>
       <div class="row">${btn('삭제', 'del', '', 'danger')}</div><p class="hint">조각을 옮겨도 가구는 따라가지 않습니다.</p>`;
+  if (wl) return `${head(`안쪽 벽 ${proj.walls.indexOf(wl) + 1}`, `${wl.dir === 'h' ? '가로' : '세로'} ${fmt(wl.len)} mm`)}
+      <div class="grid">${sel('방향', 'wall.dir', wl.dir, [['h', '가로'], ['v', '세로']])}${fld('왼쪽에서', 'wall.x', wl.x)}${fld('위에서', 'wall.z', wl.z)}${fld('길이', 'wall.len', wl.len, 'mm', 300)}</div>
+      <div class="row">${btn('삭제', 'del', '', 'danger')}</div>`;
   if (bl) return `${head('기둥·붙박이', `${fmt(bl.w)} × ${fmt(bl.d)} × ${fmt(bl.h)} mm`)}
       <div class="grid">${fld('왼쪽 벽에서', 'block.x', bl.x)}${fld('위쪽 벽에서', 'block.z', bl.z)}${fld('가로', 'block.w', bl.w, 'mm', 50)}${fld('세로', 'block.d', bl.d, 'mm', 50)}${fld('높이', 'block.h', bl.h, 'mm', 50)}</div>
       <div class="row">${btn('삭제', 'del', '', 'danger')}</div>`;
-  return tabs('tab', [['add', '가구'], ['room', '방'], ['open', '문·창문·기둥']]) + {
+  return tabs('tab', [['add', '가구'], ['room', '방'], ['open', '벽·문·기둥']]) + {
     add: () => `${search}${tabs('cat', ['전체', '내 가구', ...CATS].map(c => [c, c]), 'chips')}
       ${['전체', '내 가구'].includes(ui.cat) ? `<div class="grp"><h3>내 가구</h3><div class="cards">${proj.library.map(d => `<div class="card" data-n="${esc(d.name.toLowerCase())}"><button data-a="add" data-id="${esc(d.id)}"><b>${esc(d.name)}</b><small>${size(M.bounds(M.partsOf(d)))}</small></button><button class="mini" data-a="mode" data-v="design" data-id="${esc(d.id)}">설계</button></div>`).join('')}
       <div class="card new" data-n=""><button data-a="newDefUI">＋ 새 가구</button></div></div></div>` : ''}
@@ -372,10 +377,11 @@ function roomPanel() {
       <div class="row">${btn('두 점으로 축척 맞추기', 'pickBg', 'data-v="scale"')}${btn('방 모서리 맞추기', 'pickBg', 'data-v="origin"')}${btn('밑그림 지우기', 'bgDel', '', 'danger')}</div>
       <p class="hint">그림에서 길이를 아는 벽의 양 끝을 찍고 실제 길이를 넣으면 축척이 맞습니다. 그다음 그림 속 이 방의 왼쪽 위 안쪽 모서리를 찍으면 위치가 맞습니다. 방 치수는 '방' 탭의 가로·세로로 그림에 맞추세요.</p>` : '')(proj.bg)}
       <div class="row">${btn('평면도 그림 불러오기', 'bgLoad')}</div>`,
-    open: () => `${proj.openings.length || proj.blocks.length ? `<div class="list">${proj.openings.map(o => `<button data-a="pick" data-t="open" data-id="${esc(o.id)}"><span>${o.type === 'door' ? '문' : '창문'} · ${(([sg, i]) => wallName(sg, sg[i]))(segOf(o))}</span><small>${fmt(o.w)} × ${fmt(o.h)}</small></button>`).join('')}${proj.blocks.map(b => `<button data-a="pick" data-t="block" data-id="${esc(b.id)}"><span>기둥·붙박이</span><small>${fmt(b.w)} × ${fmt(b.d)}</small></button>`).join('')}</div>` : '<p class="hint">아직 문·창문·기둥이 없습니다.</p>'}
-      <div class="row">${btn('＋ 문', 'addOpen', 'data-v="door"')}${btn('＋ 창문', 'addOpen', 'data-v="window"')}${btn('＋ 기둥·붙박이', 'addBlock')}</div>
+    open: () => `${proj.walls.length || proj.openings.length || proj.blocks.length ? `<div class="list">${proj.walls.map((w, i) => `<button data-a="pick" data-t="wall" data-id="${esc(w.id)}"><span>안쪽 벽 ${i + 1} · ${w.dir === 'h' ? '가로' : '세로'}</span><small>${fmt(w.len)}</small></button>`).join('')}${proj.openings.map(o => `<button data-a="pick" data-t="open" data-id="${esc(o.id)}"><span>${o.type === 'door' ? '문' : '창문'} · ${(([sg, i]) => wallName(sg, sg[i]))(segOf(o))}</span><small>${fmt(o.w)} × ${fmt(o.h)}</small></button>`).join('')}${proj.blocks.map(b => `<button data-a="pick" data-t="block" data-id="${esc(b.id)}"><span>기둥·붙박이</span><small>${fmt(b.w)} × ${fmt(b.d)}</small></button>`).join('')}</div>` : '<p class="hint">아직 안쪽 벽·문·창문·기둥이 없습니다.</p>'}
+      <div class="row">${btn('＋ 안쪽 벽', 'addWall')}${btn('＋ 문', 'addOpen', 'data-v="door"')}${btn('＋ 창문', 'addOpen', 'data-v="window"')}${btn('＋ 기둥·붙박이', 'addBlock')}</div>
+      <p class="hint">안쪽 벽으로 방을 나누고, 문을 달 면(열리는 쪽)을 골라 문을 붙입니다.</p>
       <p class="hint">안쪽으로 열리는 문은 열림 궤적 안에 가구가 있으면 경고합니다.</p>
-      <p class="hint">가구는 기둥과 겹치면 경고합니다. ㄱ자·ㄷ자 방은 '방' 탭에서 방 조각을 더하세요.</p>`,
+      <p class="hint">가구는 기둥·안쪽 벽과 겹치면 경고합니다. ㄱ자·ㄷ자 방은 '방' 탭에서 방 조각을 더하세요.</p>`,
   }[ui.tab]();
 }
 const usedN = id => store.projects.reduce((n, r) => n + r.items.filter(i => i.def === id).length, 0); // 모든 방에 놓인 개수
@@ -433,8 +439,9 @@ function renderPanel() { // 다음 프레임에 그린다: Tab으로 옮겨 간 
 const SET = { // data-f="범위.키" 입력이 바뀌면 호출 (v: 숫자로 읽히면 숫자, raw: 원문)
   proj: (k, v, raw) => { proj.name = raw; },
   room: (k, v) => { proj.room[k] = v; },
-  open: (k, v) => { const o = selOpen(), s = k === 'wall' && M.segs(proj.room)[v]; if (s) Object.assign(o, { wall: s.wall, at: s.at, pos: Math.max(s.s0, Math.min(o.pos, s.s1 - o.w)) }); else o[k] = v; }, // 벽: segs 순번. pos를 그 구간으로 옮겨야 같은 줄의 다른 구간으로 돌아가지 않는다
+  open: (k, v) => { const o = selOpen(), s = k === 'wall' && M.segs(proj.room, proj.walls)[v]; if (s) Object.assign(o, { wall: s.wall, at: s.at, pos: Math.max(s.s0, Math.min(o.pos, s.s1 - o.w)) }); else o[k] = v; }, // 벽: segs 순번. pos를 그 구간으로 옮겨야 같은 줄의 다른 구간으로 돌아가지 않는다
   block: (k, v) => { selBlock()[k] = v; },
+  wall: (k, v) => { selWall()[k] = v; },
   piece: (k, v) => { selPiece()[k] = v; },
   bg: (k, v) => { proj.bg[k] = v; },
   item: (k, v) => { const it = selItem(), s = M.shape(proj, it); if (k === 'rot' || k === 'y') it[k] = v; else if (k === 'left') it.x += v - s.minx; else it.z += v - s.minz; },
@@ -493,7 +500,7 @@ const ACT = {
   fold: () => document.body.classList.toggle('folded'),
   set: d => apply(d.f, d.v),
   desel: () => { ui.sel = null; ui.partId = null; ui.pick = null; rebuild(); renderPanel(); }, // 밑그림 점 찍기 [취소]·Esc도 여기
-  pick: d => { ui.sel = { type: d.t, id: d.id }; rebuild(); renderPanel(); }, // t: open | block | part(방 조각)
+  pick: d => { ui.sel = { type: d.t, id: d.id }; rebuild(); renderPanel(); }, // t: open | block | part(방 조각) | wall(안쪽 벽)
   // 방
   add: d => addItem({ def: d.id, x: 0, z: 0, rot: 0 }),
   addCat: d => addItem(() => ({ def: M.useDef(proj.library, CATALOG[d.i]).id, x: 0, z: 0, rot: 0 })), // 규격 가구: 공용 목록에 넣고(있으면 그것) 놓는다
@@ -502,11 +509,12 @@ const ACT = {
   onTop: () => commit(() => { const it = selItem(), s = M.shape(proj, it); it.y = Math.max(0, ...proj.items.filter(o => o !== it).map(o => M.shape(proj, o)).filter(t => M.overlap(s.poly, t.poly)).map(t => t.y1)); }), // 발자국이 겹치는 가구 중 가장 높은 윗면으로
   del: () => commit(() => {
     const id = ui.sel.id, r = proj.room, pc = selPiece();
-    proj.items = proj.items.filter(i => i.id !== id); proj.openings = proj.openings.filter(o => o.id !== id); proj.blocks = proj.blocks.filter(b => b.id !== id);
+    proj.items = proj.items.filter(i => i.id !== id); proj.openings = proj.openings.filter(o => o.id !== id); proj.blocks = proj.blocks.filter(b => b.id !== id); proj.walls = proj.walls.filter(w => w.id !== id); // 지운 안쪽 벽의 문은 sanitize가 가까운 벽으로 옮긴다
     if (pc) { r.parts = r.parts.filter(p => p !== pc); if (r.parts.length === 1) Object.assign(r, { w: r.parts[0].w, d: r.parts[0].d }); } // 하나만 남으면 그 치수가 방 치수(조각은 (0,0)으로)
   }),
-  addOpen: d => commit(() => { const s = M.segs(proj.room).find(s => s.wall === 'N'), o = M.fixOpening(proj.room, { type: d.v, wall: 'N', at: s.at, pos: (s.s0 + s.s1 - 900) / 2 }); proj.openings.push(o); ui.sel = { type: 'open', id: o.id }; }), // 첫 위쪽 벽 가운데
+  addOpen: d => commit(() => { const s = M.segs(proj.room).find(s => s.wall === 'N'), o = M.fixOpening(proj.room, { type: d.v, wall: 'N', at: s.at, pos: (s.s0 + s.s1 - 900) / 2 }, proj.walls); proj.openings.push(o); ui.sel = { type: 'open', id: o.id }; }), // 첫 위쪽 벽 가운데
   addPiece: () => commit(() => { const r = proj.room, f = r.parts[0], p = { id: M.uid(), x: f.x + f.w, z: 0, w: 2000, d: 2000 }; r.parts.push(p); ui.sel = { type: 'part', id: p.id }; }), // 첫 조각 오른쪽에 맞붙여
+  addWall: () => commit(() => { const r = proj.room, w = M.fixWall(r, { dir: 'v', x: Math.round(r.w / 2), z: 0, len: r.d }); proj.walls.push(w); ui.sel = { type: 'wall', id: w.id }; }), // 가운데 세로로 끝까지
   addBlock: () => commit(() => { const b = M.fixBlock(proj.room, { x: 200, z: 200 }); proj.blocks.push(b); ui.sel = { type: 'block', id: b.id }; }), // 400 × 400 × 방 높이
   bgLoad: () => $('#img').click(),
   pickBg: d => { Object.assign(ui, { pick: { kind: d.v, pts: [] }, sel: null }); if (ui.view === 'plan') rebuild(); else { ui.view = 'plan'; setView(); } renderPanel(); },
@@ -562,7 +570,7 @@ const ACT = {
   start: () => { // 첫 화면 "이 치수로 시작": 예시 방을 빼고 그 치수의 빈 방으로(공용 가구 목록은 그대로). 값 범위는 sanitize가 맞춘다
     const v = k => { const el = $(`#start [name=${k}]`); return el.value || el.defaultValue; }, p = M.newProject('내 방', false, store.library); // 빈 칸은 보이던 기본값으로
     Object.assign(p.room, { w: v('w'), d: v('d'), h: v('h') }); store.projects = [p]; openProject(p); fresh = false;
-    toast('문·창문·기둥 탭에서 문과 창을 넣어 보세요');
+    toast('벽·문·기둥 탭에서 문과 창을 넣어 보세요');
   },
   dae: () => { const d = designDef(); download((d || proj).name + '.dae', M.toDAE(M.exportNodes(proj, d)), 'model/vnd.collada+xml'); },
   csv: () => { const d = curDef(); download(d.name + ' 재단목록.csv', '﻿' + M.cutCSV(M.cutList(M.partsOf(d)).rows, M.buyList(M.partsOf(d))), 'text/csv'); }, // BOM: 엑셀 한글

@@ -470,3 +470,70 @@ test('ㄱ자 방의 평면도·DAE, 저장본·공유 링크 왕복에서 parts�
   const old = M.readStore({ v: 3, projects: [v3] }).projects[0];
   assert.deepEqual([old.room, old.openings], [e.room, e.openings], 'v 3 사각형 방은 그대로(조각 r1, 문은 바깥 벽)');
 });
+
+// 안쪽 벽: 4200 × 3600 방을 x = 2100 세로 벽으로 나눈다
+const split = (extra = {}) => M.sanitize({ room: { w: 4200, d: 3600, h: 2400 }, walls: [{ id: 'w', dir: 'v', x: 2100, z: 0, len: 3600 }],
+  library: [{ id: 'box', name: '상자', kind: 'box', params: { W: 400, D: 400, H: 400 } }, { id: 'rug', name: '러그', kind: 'box', params: { W: 1500, D: 1000, H: 10 } }, { id: 'dr', name: '서랍장', kind: 'drawers' }], ...extra });
+
+test('안쪽 벽 sanitize와 segs: 없으면 빈 목록, 방향·범위·길이·개수, 면마다 하나씩 덧붙이고 둘레 벽은 그대로', () => {
+  assert.deepEqual([M.sanitize({ room: {} }).walls, example().walls], [[], []]);
+  const bad = M.sanitize({ room: { w: 4000, d: 3000 }, walls: [{ dir: 'x', x: 99999, z: -5, len: 10 }, { dir: 'h', x: 3900, z: 1000, len: 99999 }, null, { dir: 'h', x: 'x' }] }).walls;
+  assert.deepEqual(bad.map(w => [w.dir, w.x, w.z, w.len]), [['v', 4000, 0, 300], ['h', 3700, 1000, 300], ['h', 0, 0, 4000]]);
+  assert.equal(M.sanitize({ room: {}, walls: Array.from({ length: 150 }, () => ({})) }).walls.length, 100);
+  const p = split();
+  assert.deepEqual(M.sanitize(JSON.parse(JSON.stringify(p))), p, '다시 거쳐도 그대로');
+  assert.deepEqual(M.segs(p.room, p.walls), [...M.segs(p.room), { wall: 'W', at: 2100, s0: 0, s1: 3600, inner: 'w' }, { wall: 'E', at: 2100, s0: 0, s1: 3600, inner: 'w' }]);
+  assert.deepEqual(M.segs(p.room, [{ id: 'h', dir: 'h', x: 500, z: 1800, len: 1000 }]).slice(4).map(s => [s.wall, s.at, s.s0, s.s1]), [['N', 1800, 500, 1500], ['S', 1800, 500, 1500]]);
+});
+
+test('안쪽 벽의 문: 예전 개구부는 바깥 벽, 고른 면에 붙고 그쪽으로 열림, 벽을 지우면 가까운 벽으로', () => {
+  const p = split({ openings: [{ type: 'door', wall: 'W', pos: 500, w: 900 }, { type: 'window', wall: 'E', pos: 500, w: 900 }, { type: 'door', wall: 'W', at: 2100, pos: 1000, w: 900 }, { type: 'door', wall: 'E', at: 2100, pos: 2400, w: 900 }] });
+  assert.deepEqual(p.openings.map(o => [o.wall, o.at, o.pos]), [['W', 0, 500], ['E', 4200, 500], ['W', 2100, 1000], ['E', 2100, 2400]]);
+  assert.deepEqual(M.sanitize(JSON.parse(JSON.stringify(p))).openings, p.openings);
+  const right = M.doorZone(p.openings[2]), left = M.doorZone(p.openings[3]);
+  assert.ok(right.every(([x]) => x >= 2100 - 1e-9) && Math.max(...right.map(v => v[0])) > 2900, '오른쪽으로 열림');
+  assert.ok(left.every(([x]) => x <= 2100 + 1e-9) && Math.min(...left.map(v => v[0])) < 1300, '왼쪽으로 열림');
+  const gone = M.sanitize({ ...JSON.parse(JSON.stringify(p)), walls: [] });
+  assert.deepEqual(gone.openings.map(o => [o.wall, o.at, o.pos]), [['W', 0, 500], ['E', 4200, 500], ['W', 0, 1000], ['E', 4200, 2400]]);
+});
+
+test('안쪽 벽 상자: 벽 하나에 한 번, 선 양쪽 반씩, 어느 면에 붙은 문·창이든 뚫림', () => {
+  const inner = p => M.wallBoxes(p.room, p.openings, p.blocks, p.walls).filter(b => b.inner);
+  const plain = inner(split());
+  assert.deepEqual(plain.map(b => [b.kind, b.x, b.z, b.w, b.d, b.h, b.wall, b.id]), [['wall', 2050, 0, 100, 3600, 2400, undefined, 'w']]);
+  const p = split({ openings: [{ type: 'door', wall: 'W', at: 2100, pos: 300, w: 900 }, { type: 'window', wall: 'E', at: 2100, pos: 2000, w: 800, h: 1200, sill: 900 }] }), b = inner(p);
+  assert.deepEqual([b.filter(x => x.kind === 'top').length, b.filter(x => x.kind === 'glass').length], [2, 1]);
+  assert.ok(b.filter(x => x.kind !== 'glass').every(x => x.x === 2050 && x.w === 100));
+  const vol = b.filter(x => x.kind !== 'glass').reduce((s, x) => s + x.w * x.d * x.h, 0);
+  assert.equal(vol, M.WT * (3600 * 2400 - 900 * 2100 - 800 * 1200), '벽 부피 = 전체 − 문 − 창');
+  assert.equal(M.wallBoxes(p.room, p.openings, p.blocks, p.walls).filter(x => x.wall).length, M.wallBoxes(p.room, []).length, '둘레 벽은 그대로');
+});
+
+test('안쪽 벽 판정: 걸친 가구는 겹침, 문 자리는 지나감, 러그는 통과, 열림 막힘, reach가 벽 면에서 멈춤', () => {
+  const why = (x, z, def = 'box', openings = []) => { const p = split({ openings, items: [{ id: 'i', def, x, z }] }); return M.conflicts(p).items.get('i') ?? null; };
+  assert.equal(why(2100, 500), '겹침');
+  assert.equal(why(2350, 500), null, '벽 면(2150)에 딱 붙이면 통과');
+  const out = [{ type: 'door', wall: 'W', at: 2100, pos: 1000, w: 900, swing: 'out' }]; // 바깥 열림: 문 앞(오른쪽) 100mm만 본다
+  assert.equal(why(1900, 1450), '겹침', '벽 두께 왼쪽 반에 파고듦');
+  assert.equal(why(1900, 1450, 'box', out), null, '문 자리라 벽 조각에 안 닿는다');
+  assert.equal(why(2100, 2500, 'rug'), null, '러그는 통과');
+  const lib = split().library, front = 1000 + M.bounds(M.partsOf(lib[2])).D / 2, dr = walls => { const p = split({ walls, items: [{ id: 'd', def: 'dr', x: 3000, z: 1000 }] }); return M.openZones(p, p.items[0]).some(z => z.blocked); };
+  assert.equal(dr([]), false);
+  assert.equal(dr([{ dir: 'h', x: 2200, z: front + 300, len: 2000 }]), true, '서랍 앞을 막은 안쪽 벽');
+  const { room, walls } = split({ walls: [{ id: 'w', dir: 'v', x: 2100, z: 0, len: 3600 }, { id: 'h', dir: 'h', x: 0, z: 2000, len: 1000 }] });
+  assert.deepEqual(M.reach(room, 1000, 1000, walls), { x0: 0, x1: 2050, z0: 0, z1: 1950 });
+  assert.deepEqual(M.reach(room, 1500, 1000, walls), { x0: 0, x1: 2050, z0: 0, z1: 3600 }, '가로 벽 끝 너머');
+  assert.deepEqual(M.reach(room, 3000, 1000, walls), { x0: 2150, x1: 4200, z0: 0, z1: 3600 });
+});
+
+test('안쪽 벽의 평면도·DAE, 저장본·공유 링크 왕복에서 walls 유지', async () => {
+  const p = split({ openings: [{ type: 'door', wall: 'W', at: 2100, pos: 1000, w: 900 }] }), svg = M.planSVG(p);
+  assert.ok(svg.includes('<rect x="2050" y="0" width="100" height="1000" fill="#3a424b"/>') && svg.includes('<rect x="2050" y="1900" width="100" height="1700" fill="#3a424b"/>'));
+  const nums = [...svg.matchAll(/>(\d+)<\/text>/g)].map(m => +m[1]);
+  for (const v of [1000, 900, 1700]) assert.ok(nums.includes(v), String(v)); // 안쪽 벽의 모서리→문→모서리
+  assert.ok(M.exportNodes(p)[0].boxes.some(b => b.name === '벽' && b.x === 2050 && b.w === 100));
+  const s = { cur: p.id, library: p.library, projects: [p], cut: M.cutOpts() }, back = M.readStore(JSON.parse(M.dumpStore(s))).projects[0];
+  assert.deepEqual([back.walls, back.openings], [p.walls, p.openings]);
+  const r = await M.decodeShare(await M.encodeShare(p));
+  assert.deepEqual([r.walls, r.openings], [p.walls, p.openings]);
+});

@@ -276,3 +276,27 @@ test('방 조각: 더하면 ㄱ자, 방 밖 칸의 가구는 경고, 문을 꺾�
   expect(await page.evaluate(() => [app.M.segs(app.proj.room).length, app.proj.room.w, app.proj.room.d, app.proj.room.parts.length, app.ui.sel])).toEqual([4, 4200, 3600, 1, null]);
   await expect(page.locator('[data-f="room.w"]')).toBeVisible();
 });
+
+test('안쪽 벽: 넣으면 방을 나누고 걸친 가구는 경고, 문을 안쪽 벽 면으로 옮기고, 벽을 지우면 문이 바깥 벽으로', async ({ page }) => {
+  await example(page);
+  await page.locator('#pbody [data-a=tab][data-k=tab][data-v=open]').click();
+  await expect(page.locator('#pbody [data-a=tab][data-v=open]')).toHaveText('벽·문·기둥');
+  await page.locator('#pbody [data-a=addWall]').click();
+  expect(await page.evaluate(() => { const w = app.proj.walls; return [w.length, w[0]?.dir, w[0]?.x, w[0]?.len, app.ui.sel?.type]; })).toEqual([1, 'v', 2100, 3600, 'wall']);
+  await expect(page.locator('[data-f="wall.len"]')).toBeVisible();
+  expect(await page.evaluate(() => { const it = app.proj.items.find(i => app.M.defOf(app.proj, i).name === '퀸 침대'); return app.M.conflicts(app.proj).items.get(it.id); })).toBe('겹침'); // 침대(x 700~2300)가 벽에 걸친다
+  await expect(page.locator('#hud .chip.bad')).toContainText('겹침·막힘');
+  // 문을 넣어 안쪽 벽의 오른쪽으로 열리는 면에 붙인다
+  await page.locator('#pbody [data-a=desel]').click();
+  await page.locator('#pbody [data-a=addOpen][data-v=door]').click();
+  const opt = page.locator('[data-f="open.wall"] option', { hasText: '안쪽 벽 1 · 오른쪽으로' });
+  await page.locator('[data-f="open.wall"]').selectOption(await opt.getAttribute('value'));
+  const door = () => page.evaluate(() => { const o = app.proj.openings.at(-1); return [app.proj.openings.length, o.wall, o.at]; });
+  expect(await door()).toEqual([3, 'W', 2100]);
+  // 벽을 지우면 문은 남고 같은 방향의 바깥 벽으로
+  await page.locator('#pbody [data-a=desel]').click();
+  await page.locator('#pbody [data-a=pick][data-t=wall]').click();
+  await page.locator('#pbody [data-a=del]').click();
+  expect(await page.evaluate(() => [app.proj.walls.length, app.ui.sel])).toEqual([0, null]);
+  expect(await door()).toEqual([3, 'W', 0]);
+});

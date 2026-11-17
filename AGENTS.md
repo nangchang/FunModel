@@ -8,12 +8,13 @@ This file provides guidance to coding agents when working with code in this repo
 npm start                                              # python3 serve.py → http://localhost:5173
 npm test                                               # node --test (tests/*.test.mjs)
 node --test --test-name-pattern="adopt" tests/model.test.mjs   # 이름으로 테스트 하나만
+npm run test:e2e                                       # 화면 스모크 테스트(Playwright, tests/e2e/smoke.spec.mjs)
 ```
 
-- 빌드·번들러·린터·npm 의존성이 없다. 정적 ES 모듈을 `index.html`의 importmap(`three` → `vendor/three.module.min.js`)으로 바로 연다. `file://`로는 모듈이 안 열리므로 서버가 필요하다.
+- 빌드·번들러·린터가 없고 런타임 의존성이 없다(개발용으로 Playwright 하나). 정적 ES 모듈을 `index.html`의 importmap(`three` → `vendor/three.module.min.js`)으로 바로 연다. `file://`로는 모듈이 안 열리므로 서버가 필요하다.
 - `serve.py`가 `Cache-Control: no-cache`를 붙인다. 이게 없으면 브라우저(특히 iOS Safari)가 예전 JS를 쓴다. 미리보기 설정은 `.claude/launch.json`의 `funmodel`(포트 5173).
 - 푸시·PR마다 GitHub Actions(`.github/workflows/test.yml`)가 `npm test`를 돈다.
-- 테스트는 `src/model.js`만 본다. `src/app.js`(화면)는 자동 테스트가 없어서 브라우저로 직접 확인해야 한다. 콘솔에서 `window.app`(`M`, `ui`, `store`, `proj`, `camera`)으로 상태를 볼 수 있다.
+- `npm test`는 `src/model.js`만 보고 의존성 없이 돈다. `npm run test:e2e`는 Playwright가 `python3 serve.py 5199`를 띄워 Chromium으로 화면 흐름(첫 화면·배치·내보내기·공유 링크 등)을 훑는다. 처음에는 `npm i && npx playwright install chromium`. 스모크 테스트라 세부 동작·모양은 여전히 브라우저로 직접 확인해야 한다. 콘솔에서 `window.app`(`M`, `ui`, `store`, `proj`, `camera`)으로 상태를 볼 수 있다.
 
 ## 구조
 

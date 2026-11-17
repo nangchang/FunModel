@@ -8,6 +8,7 @@
 ```bash
 npm start    # http://localhost:5173 (file:// 로는 모듈이 안 열린다)
 npm test     # 모델 단위 테스트 (node --test)
+npm run test:e2e  # 화면 스모크 테스트 (Playwright. 처음에는 npm i && npx playwright install chromium)
 ```
 
 | 파일 | 내용 |
